@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+    <meta name="description" content="친구하자드 — 집 안.">
+    <meta name="theme-color" content="#ffffff">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%2064%2064%27%3E%3Ccircle%20cx%3D%2732%27%20cy%3D%2734%27%20r%3D%2727%27%20fill%3D%27%23ffdcc6%27%20stroke%3D%27%231f1a24%27%20stroke-width%3D%273%27/%3E%3Cpath%20d%3D%27M6%2030C6%2012%2020%205%2033%205s26%208%2025%2025c-6-9-16-12-27-12S12%2021%206%2030z%27%20fill%3D%27%231c1519%27/%3E%3Cellipse%20cx%3D%2722%27%20cy%3D%2735%27%20rx%3D%277%27%20ry%3D%278.5%27%20fill%3D%27%233a1f12%27/%3E%3Cellipse%20cx%3D%2742%27%20cy%3D%2735%27%20rx%3D%277%27%20ry%3D%278.5%27%20fill%3D%27%233a1f12%27/%3E%3Ccircle%20cx%3D%2719.5%27%20cy%3D%2731.5%27%20r%3D%273%27%20fill%3D%27%23fff%27/%3E%3Ccircle%20cx%3D%2739.5%27%20cy%3D%2731.5%27%20r%3D%273%27%20fill%3D%27%23fff%27/%3E%3Cpath%20d%3D%27M26%2047q6%205%2012%200%27%20fill%3D%27none%27%20stroke%3D%27%238c3a3a%27%20stroke-width%3D%272.6%27%20stroke-linecap%3D%27round%27/%3E%3C/svg%3E">
+    <title>친구하자드: 집</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@500;700;900&display=swap">
+    <link rel="stylesheet" href="styles/house/main.css">
+    <link rel="stylesheet" href="styles/house/mod-menu.css">
+  </head>
+
+  <body>
+    <canvas id="c" aria-label="게임 화면"></canvas>
+    <div id="ui">
+      <div id="vig"></div>
+      <div id="threat" aria-hidden="true"></div>
+      <div id="xhair" hidden><i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i><i class="d"></i></div>
+      <div id="hitm"><i></i><i></i><i></i><i></i></div>
+      <div id="obj" hidden aria-hidden="true"><svg viewBox="0 0 48 48">
+          <circle cx="24" cy="24" r="21" fill="rgba(255,255,255,0.88)" stroke="#1f1a24" stroke-width="3" />
+          <g id="objArrow">
+            <path d="M24 7 L36.5 22.5 H29.5 V38 H18.5 V22.5 H11.5 Z" fill="#f6c42f" stroke="#1f1a24" stroke-width="3"
+              stroke-linejoin="round" />
+          </g>
+        </svg></div>
+      <div id="hudK" hidden><span class="lbl">친구 요청 거절</span><b id="hudN">0</b></div>
+      <div id="ammo" hidden><span class="wn" id="ammoName">권총</span>
+        <div class="row"><b id="ammoMag">18</b><small id="ammoRes">/ 27</small></div>
+      </div>
+      <div id="prompt" hidden></div>
+      <div id="lockHint" hidden>화면을 클릭하면 마우스로 둘러봅니다</div>
+      <div id="notice" hidden role="status" aria-live="polite"></div>
+      <div id="say" hidden>싫어.</div>
+
+      <div id="touchUI" hidden>
+        <div id="stick" hidden>
+          <div class="base"></div>
+          <div class="knob"></div>
+        </div>
+        <button id="fire" class="tbtn" type="button" aria-label="쏘기">
+          <svg class="gun" viewBox="0 0 64 64" aria-hidden="true">
+            <path d="M9 22h40l3-3h5v9h-4v4H32l-2 3h-6l-3 13a3 3 0 0 1-3 2.4h-6a2 2 0 0 1-2-2.5l4-14.4L9 30z"
+              fill="#1f1a24" />
+            <path d="M30 35h6l-1.6 6.2a2 2 0 0 1-2 1.5H29" fill="none" stroke="#1f1a24" stroke-width="3"
+              stroke-linejoin="round" />
+            <rect x="12" y="24.5" width="34" height="3" rx="1.5" fill="#fff" opacity=".35" />
+          </svg>
+          <svg class="knife" viewBox="0 0 64 64" aria-hidden="true">
+            <path d="M8 40c10-3 26-10 40-24l6-4-2 7C42 33 28 41 14 44z" fill="#fff" />
+            <path d="M14 44l-4 2 4 9 5-2-1.5-7z" fill="#1f1a24" stroke="#fff" stroke-width="2.5"
+              stroke-linejoin="round" />
+            <path d="M12 41l8-3" stroke="#d3122c" stroke-width="1.6" />
+          </svg>
+        </button>
+        <button id="reload" class="tbtn" type="button" aria-label="재장전"><svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3" fill="none" stroke="#1f1a24" stroke-width="2.6"
+              stroke-linecap="round" />
+            <path d="M18.8 2.8v4.6h-4.6" fill="none" stroke="#1f1a24" stroke-width="2.6" stroke-linecap="round"
+              stroke-linejoin="round" />
+          </svg></button>
+        <button id="swap" class="tbtn" type="button" hidden aria-label="무기 바꾸기"><svg viewBox="0 0 64 64"
+            aria-hidden="true" id="swapIcon"></svg></button>
+        <button id="turn" class="tbtn" type="button" aria-label="뒤돌기"><svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M7 20.5V10a5 5 0 0 1 10 0v6.5" fill="none" stroke="#1f1a24" stroke-width="2.6"
+              stroke-linecap="round" />
+            <path d="M13.3 13.6l3.7 3.7 3.7-3.7" fill="none" stroke="#1f1a24" stroke-width="2.6" stroke-linecap="round"
+              stroke-linejoin="round" />
+          </svg></button>
+      </div>
+
+      <section id="pause" hidden>
+        <div class="box">
+          <button class="inkbtn" id="resume" type="button">계속</button>
+          <label class="sens"><span>둘러보기 감도 <b id="sensVal">1.00</b></span><input type="range" id="sens" min="0.4"
+              max="2.2" step="0.05" value="1"></label>
+          <button class="inkbtn small" id="restart" type="button">처음부터</button>
+          <p id="pauseHint"></p>
+        </div>
+      </section>
+
+      <section id="result" hidden>
+        <div class="lbl">친구 요청 거절</div>
+        <div class="num"><b id="endN">0</b><small>건</small></div>
+        <button class="inkbtn" id="again" type="button">다시하기</button>
+      </section>
+
+      <section id="title">
+        <h1 class="logo gold">친구하자드</h1>
+        <button class="inkbtn" id="start" type="button" disabled>시작</button>
+        <div class="keys deskkeys"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 이동</span><span><kbd>마우스</kbd>
+            둘러보기</span><span><kbd>클릭</kbd> 쏘기</span><span><kbd>Shift</kbd> 달리기</span><span><kbd>R</kbd>
+            재장전</span><span><kbd>Q</kbd> 무기 바꾸기</span></div>
+        <div class="keys touchkeys"><span>가로로 들면 더 넓게 보입니다</span><span>왼쪽 엄지 · 이동 (끝까지 밀면 달리기)</span><span>오른쪽 엄지 ·
+            둘러보기</span><span>버튼 · 쏘기 · 뒤돌기</span></div>
+        <div id="loading">불러오는 중</div>
+      </section>
+
+      <div id="fade"></div>
+      <section id="gate" hidden>
+        <div class="gbox">
+          <p id="gateTap">불러오는 중</p>
+          <div class="keys deskkeys"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 이동</span><span><kbd>마우스</kbd>
+              둘러보기</span><span><kbd>클릭</kbd> 쏘기</span><span><kbd>Shift</kbd> 달리기</span><span><kbd>R</kbd>
+              재장전</span><span><kbd>Q</kbd> 무기 바꾸기</span></div>
+          <div class="keys touchkeys"><span>가로로 들면 더 넓게 보입니다</span><span>왼쪽 엄지 · 이동 (끝까지 밀면 달리기)</span><span>오른쪽 엄지 ·
+              둘러보기</span><span>버튼 · 쏘기 · 뒤돌기</span></div>
+        </div>
+      </section>
+      <script type="module" src="js/house-boot.js"></script>
+      <button id="mute" class="iconbtn" type="button" aria-label="소리 끄기">
+        <svg class="on" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 9h4l5-4v14l-5-4H4z" fill="#1f1a24" />
+          <path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="#1f1a24" stroke-width="2"
+            stroke-linecap="round" />
+        </svg>
+        <svg class="off" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 9h4l5-4v14l-5-4H4z" fill="#1f1a24" />
+          <path d="M16.5 9.5l5 5m0-5l-5 5" stroke="#1f1a24" stroke-width="2" stroke-linecap="round" />
+        </svg>
+      </button>
+      <button id="pauseBtn" class="iconbtn" type="button" aria-label="일시정지" hidden><svg viewBox="0 0 24 24"
+          aria-hidden="true">
+          <rect x="6" y="5" width="4" height="14" rx="1" fill="#1f1a24" />
+          <rect x="14" y="5" width="4" height="14" rx="1" fill="#1f1a24" />
+        </svg></button>
+      <section id="modMenu" class="mod-menu" hidden aria-label="무기 개조 메뉴">
+        <header><strong>MOD MENU</strong><button id="modClose" type="button" aria-label="닫기">×</button></header>
+        <label class="mod-control"><span>공격력 <output id="modDamageValue">1.0×</output></span><input id="modDamage"
+            type="range" min="1" max="5" step="0.5" value="1" aria-label="공격력 배율"></label>
+        <label class="mod-control"><span>연사 속도 <output id="modRateValue">1.00×</output></span><input id="modRate"
+            type="range" min="1" max="3" step="0.25" value="1" aria-label="연사 속도 배율"></label>
+        <div class="mod-options">
+          <label class="mod-toggle"><span>Infinite ammo</span><input id="modInfinite" type="checkbox"></label>
+          <label class="mod-toggle"><span>No recoil</span><input id="modRecoil" type="checkbox"></label>
+          <label class="mod-toggle"><span>Auto fire</span><input id="modAuto" type="checkbox"></label>
+          <label class="mod-toggle"><span>Noclip</span><input id="modNoclip" type="checkbox"></label>
+        </div>
+        <button id="modRepel" class="mod-action" type="button">Push crowd away</button>
+        <small>백틱 키로 열기 / 닫기</small>
+      </section>
+      <div id="err" hidden></div>
+    </div>
+    <script type="module" src="js/house.js"></script>
+  </body>
+
+</html>

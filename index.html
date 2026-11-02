@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+    <meta name="description" content="인간들의 정신건강이 악화되어 정신건강한 사람이 희귀해진 근미래, 정신건강 1급인 나에게 사람들이 친구해 달라며 몰려온다.">
+    <meta name="theme-color" content="#ffffff">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%2064%2064%27%3E%3Ccircle%20cx%3D%2732%27%20cy%3D%2734%27%20r%3D%2727%27%20fill%3D%27%23ffdcc6%27%20stroke%3D%27%231f1a24%27%20stroke-width%3D%273%27/%3E%3Cpath%20d%3D%27M6%2030C6%2012%2020%205%2033%205s26%208%2025%2025c-6-9-16-12-27-12S12%2021%206%2030z%27%20fill%3D%27%231c1519%27/%3E%3Cellipse%20cx%3D%2722%27%20cy%3D%2735%27%20rx%3D%277%27%20ry%3D%278.5%27%20fill%3D%27%233a1f12%27/%3E%3Cellipse%20cx%3D%2742%27%20cy%3D%2735%27%20rx%3D%277%27%20ry%3D%278.5%27%20fill%3D%27%233a1f12%27/%3E%3Ccircle%20cx%3D%2719.5%27%20cy%3D%2731.5%27%20r%3D%273%27%20fill%3D%27%23fff%27/%3E%3Ccircle%20cx%3D%2739.5%27%20cy%3D%2731.5%27%20r%3D%273%27%20fill%3D%27%23fff%27/%3E%3Ccircle%20cx%3D%2724.5%27%20cy%3D%2738.5%27%20r%3D%271.4%27%20fill%3D%27%23fff%27/%3E%3Ccircle%20cx%3D%2744.5%27%20cy%3D%2738.5%27%20r%3D%271.4%27%20fill%3D%27%23fff%27/%3E%3Cpath%20d%3D%27M26%2047q6%205%2012%200%27%20fill%3D%27none%27%20stroke%3D%27%238c3a3a%27%20stroke-width%3D%272.6%27%20stroke-linecap%3D%27round%27/%3E%3Ccircle%20cx%3D%2713%27%20cy%3D%2744%27%20r%3D%274%27%20fill%3D%27%23ff9db0%27%20opacity%3D%27.7%27/%3E%3Ccircle%20cx%3D%2751%27%20cy%3D%2744%27%20r%3D%274%27%20fill%3D%27%23ff9db0%27%20opacity%3D%27.7%27/%3E%3Ccircle%20cx%3D%2747%27%20cy%3D%2724%27%20r%3D%271.8%27%20fill%3D%27%23d3122c%27/%3E%3Ccircle%20cx%3D%2751%27%20cy%3D%2728%27%20r%3D%271.1%27%20fill%3D%27%23d3122c%27/%3E%3C/svg%3E">
+
+    <title>친구하자드</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@500;700;900&family=Noto+Serif+KR:wght@400;700;900&display=swap">
+    <link rel="stylesheet" href="styles/title/main.css">
+    <link rel="stylesheet" href="styles/house/mod-menu.css">
+  </head>
+
+  <body>
+    <script type="module" src="js/title-boot.js"></script>
+
+    <canvas id="c" aria-label="게임 화면"></canvas>
+    <div id="ui">
+      <div id="danger"></div>
+      <div id="bubbles"></div>
+      <div id="hud" hidden><span class="lbl">친구 요청 거절</span><b id="killN">0</b><span id="powerStatus" hidden></span></div>
+      <div id="itemNotice" hidden role="status" aria-live="polite"></div>
+      <div id="stick" hidden>
+        <div class="base"></div>
+        <div class="knob"></div>
+      </div>
+      <div id="hint" hidden>
+        <div class="ring"></div>
+        <div class="dot"></div>
+        <div class="kb"><span>W</span><span>A</span><span>S</span><span>D</span></div>
+      </div>
+      <button id="weapon" hidden aria-label="무기">
+        <svg class="gun" viewBox="0 0 64 64" aria-hidden="true">
+          <path d="M9 22h40l3-3h5v9h-4v4H32l-2 3h-6l-3 13a3 3 0 0 1-3 2.4h-6a2 2 0 0 1-2-2.5l4-14.4L9 30z"
+            fill="#1f1a24" />
+          <path d="M30 35h6l-1.6 6.2a2 2 0 0 1-2 1.5H29" fill="none" stroke="#1f1a24" stroke-width="3"
+            stroke-linejoin="round" />
+          <rect x="12" y="24.5" width="34" height="3" rx="1.5" fill="#fff" opacity=".35" />
+        </svg>
+        <svg class="knife" viewBox="0 0 64 64" aria-hidden="true">
+          <path d="M8 40c10-3 26-10 40-24l6-4-2 7C42 33 28 41 14 44z" fill="#fff" />
+          <path d="M14 44l-4 2 4 9 5-2-1.5-7z" fill="#1f1a24" stroke="#fff" stroke-width="2.5" stroke-linejoin="round" />
+          <path d="M12 41l8-3" stroke="#d3122c" stroke-width="1.6" />
+        </svg>
+        <svg class="sg" viewBox="0 0 64 64" aria-hidden="true">
+          <path d="M4 25h40l2-2h12v6H40l-4 2h-9l-2 2H15l-6 9H3l4-11z" fill="#1f1a24" />
+          <rect x="27" y="29" width="13" height="5" rx="1.5" fill="#8a4f2a" />
+          <rect x="8" y="26.5" width="34" height="2.4" rx="1.2" fill="#fff" opacity=".35" />
+        </svg>
+        <b id="sgN" hidden>0</b>
+        <span class="keycap">SPACE</span>
+      </button>
+      <div id="arrow" hidden aria-hidden="true"><svg viewBox="0 0 48 48">
+          <path d="M24 4 L44.5 26.5 H32.5 V44 H15.5 V26.5 H3.5 Z" fill="#f6c42f" stroke="#1f1a24" stroke-width="3.6"
+            stroke-linejoin="round" />
+          <path d="M24 10.5 L35 22.5" stroke="#fff6cc" stroke-width="2.6" stroke-linecap="round" opacity=".85" />
+        </svg></div>
+      <div id="toast" hidden role="status"><span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24">
+            <circle cx="9.2" cy="8" r="3.6" fill="#fff" />
+            <path d="M2.6 19c.5-3.9 3.2-6.1 6.6-6.1s6.1 2.2 6.6 6.1z" fill="#fff" />
+            <path d="M19 6.6v7.2M15.4 10.2h7.2" stroke="#fff" stroke-width="2.3" stroke-linecap="round" />
+          </svg></span><span class="msg">친구를 새로 사귀었습니다.</span><span class="tm">방금</span></div>
+      <div id="rescueNotice" hidden role="status" aria-live="polite">친구를 구해 주세요.</div>
+      <div id="sub" hidden></div>
+      <div id="backHint" hidden role="status"></div>
+      <div id="slam" hidden><span class="gold">친구하자드</span></div>
+      <div id="flash"></div>
+      <div id="linkFade"></div>
+
+      <section id="intro" hidden>
+        <div class="lines">
+          <p></p>
+          <p></p>
+          <p></p>
+        </div>
+      </section>
+
+      <div class="certwrap" id="certA" hidden>
+        <article class="cert" aria-label="정신건강 등급 판정서">
+          <h2>정신건강 등급 판정서</h2>
+          <div class="no" id="certNoA">제 20XX-04417호</div>
+          <dl>
+            <dt>판정 등급</dt>
+            <dd class="slot">
+              <div class="stamp" id="stampA"><small>정신건강</small><b>1급</b></div>
+            </dd>
+            <dt>특이사항</dt>
+            <dd>없음</dd>
+          </dl>
+          <p class="body">위 사람은 정신이 건강하므로 「특별관리 보호대상」으로 지정함.</p>
+          <div class="date" id="certDateA"></div>
+          <div class="org"><span class="agency-mark" aria-hidden="true"></span><span>국가정신건강등급심사원</span></div>
+        </article>
+      </div>
+
+      <section id="result" hidden>
+        <div class="lbl">친구 요청 거절</div>
+        <div class="num"><b id="endN">0</b><small>건</small></div>
+        <button id="again" type="button">다시하기</button>
+      </section>
+
+      <section id="title">
+        <h1 class="logo gold">친구하자드</h1>
+        <button id="start" type="button" disabled>시작</button>
+        <div id="consoleBadge" aria-label="가상 콘솔 HyeomStation">
+          <svg viewBox="0 0 96 74" aria-hidden="true">
+            <path d="M16 53c-9 2-14 5-12 8 3 4 22 3 37-1l35-9-10-4-35 9c-6 2-13 3-16 1-1-1 0-2 5-3z" fill="#f5c83d" />
+            <path d="M36 63c15 4 39 2 53-4 10-4 5-9-5-12l-11-3-11 4 15 4c5 2 5 3 0 5-11 3-25 4-35 2z" fill="#16bda6" />
+            <path d="M42 59c15 0 28-3 36-6l11 3c-10 6-27 9-46 8z" fill="#2174d8" />
+            <path d="M31 6l13 4v19l17 5V15l12 4v42l-12-4V43l-17-5v21l-13-4z" fill="#820817" />
+            <path d="M27 2l13 4v19l17 5V11l12 4v42l-12-4V39l-17-5v21l-13-4z" fill="#f21528" />
+            <path d="M40 6l4 4v19l-4-4zm29 9l4 4v42l-4-4z" fill="#ba0d23" />
+          </svg>
+          <span>HyeomStation</span>
+        </div>
+      </section>
+
+      <button id="mute" class="iconbtn" type="button" aria-label="소리 끄기">
+        <svg class="on" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 9h4l5-4v14l-5-4H4z" fill="#1f1a24" />
+          <path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="#1f1a24" stroke-width="2"
+            stroke-linecap="round" />
+        </svg>
+        <svg class="off" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 9h4l5-4v14l-5-4H4z" fill="#1f1a24" />
+          <path d="M16.5 9.5l5 5m0-5l-5 5" stroke="#1f1a24" stroke-width="2" stroke-linecap="round" />
+        </svg>
+      </button>
+      <section id="modMenu" class="mod-menu" hidden aria-label="Modifier menu">
+        <header><strong>MOD MENU</strong><button id="modClose" type="button" aria-label="Close">×</button></header>
+        <div class="mod-options">
+          <label class="mod-toggle"><span>Infinite ammo</span><input id="modInfinite" type="checkbox"></label>
+          <label class="mod-toggle"><span>No recoil</span><input id="modRecoil" type="checkbox"></label>
+          <label class="mod-toggle"><span>Auto fire</span><input id="modAuto" type="checkbox"></label>
+          <label class="mod-toggle"><span>Noclip</span><input id="modNoclip" type="checkbox"></label>
+          <label class="mod-toggle"><span>All powerups · ∞ duration</span><input id="modAllPowers"
+              type="checkbox"></label>
+        </div>
+        <button id="modRepel" class="mod-action" type="button">Push crowd away</button>
+        <small>Press the backtick key to open or close</small>
+      </section>
+      <div id="err" hidden></div>
+    </div>
+
+
+    <script type="module" src="js/title.js"></script>
+  </body>
+
+</html>

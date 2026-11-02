@@ -1,0 +1,30 @@
+/* Compact keyboard-opened weapon tuning panel */
+.mod-menu {
+  position: absolute;
+  z-index: 12;
+  top: calc(64px + var(--safe-t));
+  left: calc(14px + var(--safe-l));
+  width: min(290px, calc(100vw - 28px - var(--safe-l) - var(--safe-r)));
+  padding: 15px 16px 12px;
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+  background: rgba(255, 253, 247, .97);
+  color: var(--ink);
+  box-shadow: 0 5px 0 rgba(31, 26, 36, .82), 0 12px 32px rgba(0, 0, 0, .18);
+  pointer-events: auto;
+}
+.mod-menu[hidden] { display: none !important; }
+.mod-menu header { display:flex; align-items:center; justify-content:space-between; margin-bottom: 14px; font-size: 13px; letter-spacing: .12em; }
+.mod-menu header button { border:0; background:transparent; font:700 25px/1 var(--font-sans); padding:0 2px; }
+.mod-control { display:block; margin: 12px 0; font-size:13px; font-weight:700; }
+.mod-control span { display:flex; justify-content:space-between; align-items:center; margin-bottom:7px; }
+.mod-control output { color:var(--blood); font-variant-numeric:tabular-nums; }
+.mod-control input { width:100%; accent-color:var(--blood); }
+.mod-menu small { color:var(--ink-2); font-size:11px; }
+.mod-menu :focus-visible { outline:3px solid var(--gold); outline-offset:3px; }
+
+.mod-options { margin: 14px 0; padding-top: 5px; border-top: 1px solid var(--line); }
+.mod-toggle { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:7px 0; font-size:13px; font-weight:700; cursor:pointer; }
+.mod-toggle input { width:18px; height:18px; margin:0; accent-color:var(--blood); }
+.mod-action { width:100%; min-height:38px; margin:4px 0 10px; border:0; border-radius:4px; background:var(--ink); color:#fff !important; font:700 13px var(--font-sans); cursor:pointer; }
+.mod-action:active { transform:translateY(2px); }
