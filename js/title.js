@@ -9,6 +9,7 @@ const lerp = (a, b, t) => a + (b - a) * t;
 const rand = (a, b) => a + Math.random() * (b - a);
 const pick = (arr) => arr[(Math.random() * arr.length) | 0];
 const TAU = Math.PI * 2;
+const rngChoice = (a) => a[Math.floor(Math.random() * a.length)];
 const approach = (cur, target, k, dt) => cur + (target - cur) * (1 - Math.exp(-k * dt));
 const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const angleApproach = (cur, target, k, dt) => cur + wrapAngle(target - cur) * (1 - Math.exp(-k * dt));
@@ -499,7 +500,6 @@ function sfxGun(pan = 0) {
   o.connect(g3).connect(sh);
   o.start(t);
   o.stop(t + 0.22);
-  lastGunT = t;
 }
 let tinkBudget = 0;
 
@@ -5071,7 +5071,7 @@ function makeCarePosterAtlas(existing) {
     ['건강한 인간관계가', '당신을 건강하게', '합니다.'],
     ['마음이 건강한', '사람을', '곁에 두세요'],
     ['나를 아프게 하는', '관계는', '정리하세요'],
-    ['이놈이', '누가', '핵을', '써래!']
+    ['이놈이', '누가', '어디서', '핵을', '써래!']
   ];
   const colors = ['#37658b', '#5c7869', '#9b5b60', '#69788c'];
   for (let k = 0; k < CARE_POSTER_VARIANTS; k++) {
@@ -5143,35 +5143,39 @@ function makeCarePosterAtlas(existing) {
       g.textAlign = 'center';
       g.fillStyle = '#252d35';
       g.font = '900 43px "Noto Sans KR", "Malgun Gothic", sans-serif';
-      for (let j = 0; j < lines[k].length; j++) g.fillText(lines[k][j], 256, 266 + j * 75);
+      const arr = rngChoice(lines);
+      const arrIdx = lines.indexOf(arr);
+      for (let j = 0; j < arr.length; j++) g.fillText(arr[j], 256, 266 + j * 75);
       // 두 사람 그림. 마지막 포스터에는 둘 사이를 가르는 단선이 인쇄되어 있다.
-      g.strokeStyle = colors[k];
-      g.lineWidth = 9;
-      g.lineCap = 'round';
-      for (const px of [192, 320]) {
+      if (arrIdx != 3) {
+        g.strokeStyle = colors[k];
+        g.lineWidth = 9;
+        g.lineCap = 'round';
+        for (const px of [192, 320]) {
+          g.beginPath();
+          g.arc(px, 519, 23, 0, TAU);
+          g.stroke();
+          g.beginPath();
+          g.moveTo(px, 546);
+          g.lineTo(px, 593);
+          g.moveTo(px - 32, 567);
+          g.lineTo(px + 32, 567);
+          g.moveTo(px, 593);
+          g.lineTo(px - 25, 628);
+          g.moveTo(px, 593);
+          g.lineTo(px + 25, 628);
+          g.stroke();
+        }
         g.beginPath();
-        g.arc(px, 519, 23, 0, TAU);
+        if (k === 2) {
+          g.moveTo(263, 530);
+          g.lineTo(248, 610);
+        } else {
+          g.moveTo(224, 567);
+          g.lineTo(288, 567);
+        }
         g.stroke();
-        g.beginPath();
-        g.moveTo(px, 546);
-        g.lineTo(px, 593);
-        g.moveTo(px - 32, 567);
-        g.lineTo(px + 32, 567);
-        g.moveTo(px, 593);
-        g.lineTo(px - 25, 628);
-        g.moveTo(px, 593);
-        g.lineTo(px + 25, 628);
-        g.stroke();
-      }
-      g.beginPath();
-      if (k === 2) {
-        g.moveTo(263, 530);
-        g.lineTo(248, 610);
-      } else {
-        g.moveTo(224, 567);
-        g.lineTo(288, 567);
-      }
-      g.stroke();
+      } 
       // 하단의 작은 발행기관 표식. 포스터 크기와 본문은 그대로 둔다.
       drawAgencyMark(g, 427, 680, 46, colors[k]);
       g.fillStyle = colors[k];
