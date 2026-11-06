@@ -1,5 +1,4 @@
-// Game runtime extracted from the original page.
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
+import * as THREE from 'three';
 import VOICE_DATA from './voice-data.js';
 window.__fhReady = true;
 
@@ -37,7 +36,7 @@ function linkWrite(o) {
   const v = Object.assign({ v: 1, at: Date.now() }, o);
   try { sessionStorage.setItem(LINK_KEY, JSON.stringify(v)); return ''; } catch (e) { return '#s=' + encodeURIComponent(JSON.stringify(v)); }
 }
-function linkClear() { try { sessionStorage.removeItem(LINK_KEY); } catch (e) { /* 무시 */ } if (location.hash) history.replaceState(null, '', location.pathname + location.search); }
+function linkClear() { try { sessionStorage.removeItem(LINK_KEY); } catch { } if (location.hash) history.replaceState(null, '', location.pathname + location.search); }
 // 밖에서 들어온 판이면 그 판의 거절 횟수를 이어서 센다
 const LINK = (() => { const l = linkRead(); return l && l.dir === 'in' ? l : null; })();
 const LINK_KILLS = LINK ? Math.max(0, LINK.kills | 0) : 0;
@@ -46,12 +45,10 @@ function goMainTitle() { linkClear(); location.replace('./' + location.search); 
 
 // ───────────────────────── 렌더러 / 장면 ─────────────────────────
 const canvas = $('c');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+const renderer = new THREE.WebGLRenderer({ canvas });
 const PR_MAX = Math.min(window.devicePixelRatio || 1, 2);
 let PR = PR_MAX;
 renderer.setPixelRatio(PR);
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.NoToneMapping;
 renderer.autoClear = false;
 renderer.setClearColor(0x000000, 1);
 
@@ -496,9 +493,9 @@ function dragAssign(items, dt = 1 / 60) {
 }
 function sfxDragStop(p) {
   if (!ac) return;
-  for (const v of DRAG.v) if (v.p === p) { v.p = null; v.lv = 0; try { v.g.gain.setTargetAtTime(0, ac.currentTime, 0.03); } catch (e) { /* 무시 */ } }
+  for (const v of DRAG.v) if (v.p === p) { v.p = null; v.lv = 0; try { v.g.gain.setTargetAtTime(0, ac.currentTime, 0.03); } catch { } }
 }
-function sfxDragAllStop() { if (!ac) return; for (const v of DRAG.v) { v.p = null; v.lv = 0; try { v.g.gain.setTargetAtTime(0, ac.currentTime, 0.03); } catch (e) { /* 무시 */ } } }
+function sfxDragAllStop() { if (!ac) return; for (const v of DRAG.v) { v.p = null; v.lv = 0; try { v.g.gain.setTargetAtTime(0, ac.currentTime, 0.03); } catch { } } }
 // 소리 확인용 (오프라인): 한 번 쓰윽 끌려오는 소리
 function sfxDragDemo(dur = 1.4) {
   const v = dragVoice(), t = ac.currentTime;
@@ -676,7 +673,7 @@ function humKill() {
 function humStop() {
   if (!HUM.on) return;
   const t = ac.currentTime;
-  try { for (const s of HUM.src) s.stop(t + 0.05); } catch (e) { /* 무시 */ }
+  try { for (const s of HUM.src) s.stop(t + 0.05); } catch { }
   HUM.on = false;
 }
 
@@ -713,7 +710,7 @@ function playVoice(key, o = {}) {
       try { if (lfo) lfo.stop(t + fast + 0.02); if (lfo2) lfo2.stop(t + fast + 0.02); } catch (e) { /* 이미 끝남 */ }
     },
   };
-  src.onended = () => { h.stopped = true; activeVoices.delete(h); try { if (lfo) lfo.stop(); if (lfo2) lfo2.stop(); } catch (e) { /* 무시 */ } };
+  src.onended = () => { h.stopped = true; activeVoices.delete(h); try { if (lfo) lfo.stop(); if (lfo2) lfo2.stop(); } catch { } };
   activeVoices.add(h);
   return h;
 }
@@ -1507,11 +1504,9 @@ function toonLit(color, extra = {}, key = 'toonlit') { return patchLit(new THREE
 const OUT_LIT = patchLit(new THREE.MeshBasicMaterial({ color: 0x221a2b, side: THREE.BackSide }), 'outline-lit', true);
 
 // 사람을 비추는 빛 (벽은 밝기 지도만 쓰고 이 빛은 툰 재질만 받는다)
-const hemi = new THREE.HemisphereLight(0xffffff, 0x8f7a46, 1.35);
-scene.add(hemi);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8f7a46, 1.35));
 const keyLight = new THREE.DirectionalLight(0xffffff, 1.45);
 scene.add(keyLight, keyLight.target);
-
 
 // ───────────────────────── 고시원 ─────────────────────────
 // 평면도는 mkgosi.py가 만든다 (복도·방·주방·샤워실·끝방, 벽 면 목록, 형광등 자리)
@@ -1524,7 +1519,6 @@ const ENTRY = { x0: 15.25, x1: 17.75, z0: 34.25, z1: 36.5 };
 const GD_W = 0.875, GD_H = 2.0;   // 고시원 방문
 function regionAt(x, z) { return z < 30 ? 'back' : z < HALL.z1 ? 'hall' : 'entry'; }
 function floorAt(x, z) { return z >= ENTRY.z0 && z < ENTRY.z1 + 0.5 ? ENTRY_Y : 0; }
-function ceilAt(x, z) { return z < 30 ? CEIL : HOME_CEIL; }
 function inRect(r, x, z, m = 0) { return x >= r[0] - m && x <= r[2] + m && z >= r[1] - m && z <= r[3] + m; }
 // 고시원 바닥: 주방·로비·샤워실은 타일, 나머지는 장판
 function floorKindAt(x, z) {
@@ -4883,7 +4877,7 @@ buildDoorScene();
 try {
   renderer.compile(scene, camera); renderer.compile(vmScene, vmCamera); renderer.compile(doorScene, doorCamera);
   VM.shot.g.visible = true; renderer.compile(vmScene, vmCamera); VM.shot.g.visible = false;
-} catch (e) { /* 무시 */ }
+} catch { }
 $('start').disabled = false;
 $('loading').hidden = true;
 if (LINK) gateShow();

@@ -1,5 +1,5 @@
 // Game runtime extracted from the original page.
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
+import * as THREE from 'three';
 import VOICE_DATA from './voice-data.js';
 
 // ───────────────────────── 기본 도구 ─────────────────────────
@@ -82,9 +82,7 @@ function linkWrite(o) {
 function linkClear() {
   try {
     sessionStorage.removeItem(LINK_KEY);
-  } catch (e) {
-    /* 무시 */
-  }
+  } catch (e) { }
   if (location.hash) history.replaceState(null, '', location.pathname + location.search);
 }
 // 집에서 막 나온 참이면 그 상태로 이어서
@@ -120,17 +118,10 @@ function drawAgencyMark(g, x, y, size, ink = '#69788c') {
 
 // ───────────────────────── 렌더러 / 장면 ─────────────────────────
 const canvas = $('c');
-const renderer = new THREE.WebGLRenderer({
-  canvas,
-  antialias: true,
-  powerPreference: 'high-performance'
-});
+const renderer = new THREE.WebGLRenderer({ canvas });
 let PR = Math.min(window.devicePixelRatio || 1, 2);
 renderer.setPixelRatio(PR);
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.NoToneMapping;
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.setClearColor(0xffffff, 1);
 
 const scene = new THREE.Scene();
@@ -140,8 +131,7 @@ scene.fog = new THREE.Fog(0xffffff, 22, 52);
 const camera = new THREE.PerspectiveCamera(36, 1, 0.05, 160);
 camera.position.set(0, 12, 12);
 
-const hemi = new THREE.HemisphereLight(0xffffff, 0xe7e1ef, 1.95);
-scene.add(hemi);
+scene.add(new THREE.HemisphereLight(0xffffff, 0xe7e1ef, 1.95));
 const sun = new THREE.DirectionalLight(0xfff8ee, 2.25);
 sun.castShadow = true;
 sun.shadow.mapSize.set(IS_TOUCH ? 1536 : 2048, IS_TOUCH ? 1536 : 2048);
@@ -245,9 +235,7 @@ function audioRebuild() {
   for (const n of [A.comp, A.master, A.verb, A.verbOut, A.tap, A.sfx, A.voice, A.music]) {
     try {
       n.disconnect();
-    } catch (e) {
-      /* 무시 */
-    }
+    } catch { }
   }
   A.master = ac.createGain();
   A.master.gain.value = MUTED ? 0 : 0.92;
@@ -1079,8 +1067,7 @@ function playVoice(key, o = {}) {
   src.playbackRate.value = rate;
   const g = gainN(o.gain === undefined ? 1 : o.gain);
   let node = src;
-  let lfo = null,
-    lfo2 = null;
+  let lfo = null, lfo2 = null;
   if (o.sob) {
     // 울먹임: 음높이 떨림 + 숨 떨림
     lfo = oscN('sine', rand(5.6, 7.4));
@@ -1136,15 +1123,11 @@ function playVoice(key, o = {}) {
         g.gain.setValueAtTime(g.gain.value, t);
         g.gain.linearRampToValueAtTime(0, t + fast);
         src.stop(t + fast + 0.01);
-      } catch (e) {
-        /* 이미 끝남 */
-      }
+      } catch {}
       try {
         if (lfo) lfo.stop(t + fast + 0.02);
         if (lfo2) lfo2.stop(t + fast + 0.02);
-      } catch (e) {
-        /* 이미 끝남 */
-      }
+      } catch {}
     },
   };
   src.onended = () => {
@@ -1153,9 +1136,7 @@ function playVoice(key, o = {}) {
     try {
       if (lfo) lfo.stop();
       if (lfo2) lfo2.stop();
-    } catch (e) {
-      /* 무시 */
-    }
+    } catch { }
   };
   activeVoices.add(h);
   return h;
@@ -1418,9 +1399,7 @@ function musicHandoff() {
   setTimeout(() => {
     try {
       old.disconnect();
-    } catch (e) {
-      /* 무시 */
-    }
+    } catch { }
   }, 3000);
   MU.bus = gainN(1);
   MU.bus.connect(A.music);
@@ -1441,18 +1420,14 @@ function musicStop(hard) {
   if (src) {
     try {
       src.stop(t + (hard ? 0.05 : 0.75));
-    } catch (e) {
-      /* 무시 */
-    }
+    } catch { }
   }
   MU.bus = null;
   MU.src = null;
   setTimeout(() => {
     try {
       b.disconnect();
-    } catch (e) {
-      /* 무시 */
-    }
+    } catch { }
   }, 2000);
 }
 // 지금 몇 번째 16분음표인지 (다시 짤 때 이어서 틀기용)
@@ -2553,8 +2528,7 @@ function bloodSpot(g, x, y, r) {
     g.fill();
   }
 }
-let faceBloodN = 0,
-  shirtBloodN = 0;
+let faceBloodN = 0, shirtBloodN = 0;
 
 function addMeFaceBlood(n) {
   if (faceBloodN > 34) return;
@@ -2633,7 +2607,7 @@ function makeBadgeTex() {
     g.fillText('정신건강', 151, 44);
     g.fillStyle = '#d3122c';
     g.font = '400 52px "Black Han Sans", "Noto Sans KR", sans-serif';
-    g.fillText('1급', 151, 92);
+    g.fillText('0급', 151, 92);
     t.needsUpdate = true;
   };
   const t = texOf(c);
@@ -6163,13 +6137,13 @@ function setFace(p, f) {
 function shootable(p) {
   return p.state === 'chase' || p.state === 'press' || p.state === 'rise' || p.state === 'idle' || (p.state === 'cling' && p.host !== ME);
 }
-// 몰려드는 대상: 가장 가까운 정신건강한 사람 (1급을 조금 더 좋아함)
+// 몰려드는 대상: 가장 가까운 정신건강한 사람 (0급을 조금 더 좋아함)
 function hostActive(h) {
   return h === ME || (!!h && (h.state === 'trapped' || h.state === 'freed' || h.state === 'five' || h.state === 'fight'));
 }
 
 function pickHost(p) {
-  // 일부 러너는 친구들에게 시선을 빼앗기지 않고 1급인 나를 끝까지 좇는다.
+  // 일부 러너는 친구들에게 시선을 빼앗기지 않고 0급인 나를 끝까지 좇는다.
   if (p.playerFocus) return ME;
   let best = ME,
     bd = Math.hypot(ME.x - p.x, ME.z - p.z) * 0.75;
@@ -9633,7 +9607,7 @@ canvas.addEventListener('pointerdown', (e) => {
   try {
     canvas.setPointerCapture(e.pointerId);
   } catch (err) {
-    /* 무시 */
+    
   }
   stickShow(sx0, sy0);
   e.preventDefault();
@@ -9663,7 +9637,7 @@ weaponEl.addEventListener('pointerdown', (e) => {
   try {
     weaponEl.setPointerCapture(e.pointerId);
   } catch (err) {
-    /* 무시 */
+    
   }
   weaponEl.classList.add('down');
   weaponDown();
@@ -10551,7 +10525,7 @@ function startIntro() {
         gain: 1.0,
         verb: 0.12
       });
-      showSub('나는 정신건강 1급이다.');
+      showSub('나는 정신건강 0급이다.');
     }],
     [13.3, () => {
       hideSub();
@@ -10559,6 +10533,9 @@ function startIntro() {
     }],
     [20, () => {
       showSub('...씨발.');
+    }],
+    [23.3, () => {
+      hideSub();
     }],
     ...noticeSteps(22),
   ]);
@@ -10887,7 +10864,7 @@ function houseAppear() {
     l.href = './gosiwon.html' + location.search;
     document.head.appendChild(l);
   } catch (e) {
-    /* 무시 */
+    
   }
 }
 
@@ -11167,9 +11144,7 @@ function resumeFromHouse() {
     try {
       const pr = ac.resume();
       if (pr && pr.catch) pr.catch(() => { });
-    } catch (e) {
-      /* 무시 */
-    }
+    } catch { }
   }
 }
 window.addEventListener('pointerdown', (e) => {

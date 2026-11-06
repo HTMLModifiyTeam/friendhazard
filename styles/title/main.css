@@ -22,9 +22,7 @@
   color-scheme: light;
 }
 
-*,
-*::before,
-*::after {
+*, *::before, *::after {
   box-sizing: border-box;
 }
 
@@ -32,8 +30,7 @@
   display: none !important;
 }
 
-html,
-body {
+html, body {
   height: 100%;
   margin: 0;
   overflow: hidden;
