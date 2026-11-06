@@ -1,6 +1,7 @@
 // Game runtime extracted from the original page.
 import * as THREE from 'three';
 import VOICE_DATA from './voice-data.js';
+import Linker from './links.js';
 import { $, clamp, lerp, rand, pick, TAU, rngChoice, approach, wrapAngle, angleApproach, Store } from './utils.js';
 import { easeOutCubic, easeInOutCubic, easeInQuad, easeInOutSine } from './eases.js'
 
@@ -8,65 +9,23 @@ import { easeOutCubic, easeInOutCubic, easeInQuad, easeInOutSine } from './eases
 const store = new Store();
 const QS = new URLSearchParams(location.search);
 let IS_TOUCH = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) || ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
-// 집 안(1인칭 고시원, gosiwon.html)과 오가며 넘겨주는 판 상태. 같은 탭 안에서만 쓰고, 막힌 브라우저는 주소 뒤에 붙여 넘긴다.
-const LINK_KEY = 'fh_link';
 
-function linkRead() {
-  let v = null;
-  try {
-    v = JSON.parse(sessionStorage.getItem(LINK_KEY) || 'null');
-  } catch (e) {
-    v = null;
-  }
-  if (!v) {
-    const m = location.hash.match(/[#&]s=([^&]+)/);
-    if (m) {
-      try {
-        v = JSON.parse(decodeURIComponent(m[1]));
-      } catch (e) {
-        v = null;
-      }
-    }
-  }
-  return v && v.v === 1 && Date.now() - (v.at || 0) < 6 * 3600e3 ? v : null;
-}
-
-function linkWrite(o) {
-  const v = Object.assign({
-    v: 1,
-    at: Date.now()
-  }, o);
-  try {
-    sessionStorage.setItem(LINK_KEY, JSON.stringify(v));
-    return '';
-  } catch (e) {
-    return '#s=' + encodeURIComponent(JSON.stringify(v));
-  }
-}
-
-function linkClear() {
-  try {
-    sessionStorage.removeItem(LINK_KEY);
-  } catch (e) { }
-  if (location.hash) history.replaceState(null, '', location.pathname + location.search);
-}
+const Link = new Linker();
 // 집에서 막 나온 참이면 그 상태로 이어서
 const RETURN = (() => {
-  const l = linkRead();
-  if (l && l.dir === 'in') linkClear();
+  const l = Link.read();
+  if (l && l.dir === 'in') Link.clear();
   return l && l.dir === 'out' ? l : null;
 })();
-if (RETURN) linkClear();
+if (RETURN) Link.clear();
 
 // 에스팀랩의 온이 원본을 작은 기관 마크로만 사용한다.
-const ONI_MARK_SRC = "../imgs/oniMark.svg";
+const ONI_MARK_SRC = "./imgs/oniMark.png";
 const oniMarkImage = new Image();
 oniMarkImage.src = ONI_MARK_SRC;
-await oniMarkImage.decode().catch(() => { });
 for (const holder of document.querySelectorAll('.agency-mark')) {
   const img = new Image();
   img.src = ONI_MARK_SRC;
-  img.alt = '';
   holder.append(img);
 }
 
@@ -6133,8 +6092,6 @@ function pickHost(p) {
 }
 
 // ───────────────────────── 포즈 ─────────────────────────
-const MEHEAD = new THREE.Vector3();
-
 function lookAtMe(p, o, w) {
   const H = p.state === 'idle' || p.state === 'rise' ? ME : (p.host || ME);
   const dx = H.x - p.x,
@@ -9526,9 +9483,7 @@ function updateArrow() {
 }
 
 // ───────────────────────── 입력 ─────────────────────────
-const stickEl = $('stick'),
-  knobEl = stickEl.querySelector('.knob'),
-  baseEl = stickEl.querySelector('.base');
+const stickEl = $('stick'), knobEl = stickEl.querySelector('.knob')
 const STICK_R = 56;
 let stickId = null,
   sx0 = 0,
@@ -9541,8 +9496,7 @@ function stickShow(x, y) {
 }
 
 function stickMove(e) {
-  let dx = e.clientX - sx0,
-    dy = e.clientY - sy0;
+  let dx = e.clientX - sx0, dy = e.clientY - sy0;
   const l = Math.hypot(dx, dy);
   if (l > STICK_R) {
     // 손가락이 멀리 가면 받침도 따라감
@@ -10956,7 +10910,7 @@ function goInside() {
     face: faceBloodN,
     shirt: shirtBloodN,
   };
-  const hash = linkWrite({
+  const hash = Link.write({
     dir: 'in',
     kills: G.kills,
     main
@@ -11221,8 +11175,7 @@ function frame(now) {
   if (dt > 0.25) dt = 0.25;
   if (dt <= 0) return;
   // 프레임이 느려져도 인트로·전투 시간이 오디오와 함께 흐르도록 나누어 계산한다.
-  const steps = Math.ceil(dt / 0.05),
-    tick = dt / steps;
+  const steps = Math.ceil(dt / 0.05), tick = dt / steps;
   for (let i = 0; i < steps; i++) simulate(tick);
   animate(dt);
   camUpdate(dt);
@@ -11410,7 +11363,6 @@ window.__fh = {
   resumeFromHouse,
   sgEquip,
   sgDiscard,
-  linkRead,
   spawn(n, kind = 0) {
     for (let i = 0; i < n; i++) spawnOne(kind);
   },

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import VOICE_DATA from './voice-data.js';
+import Linker from './links.js';
 import { $, clamp, lerp, rand, pick, TAU, approach, wrapAngle, Store } from './utils.js';
 import { easeOutCubic, easeInQuad, easeInOutSine } from './eases.js'
 
@@ -13,24 +14,12 @@ let IS_TOUCH = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').ma
 if (QS.has('desk')) IS_TOUCH = false;
 if (QS.has('touch')) IS_TOUCH = true;
 document.body.classList.toggle('touch', IS_TOUCH);
-// 밖(원래 게임, index.html)과 오가며 넘겨받는 판 상태. 같은 탭 안에서만 쓰고, 막힌 브라우저는 주소 뒤에 붙여 넘긴다.
-const LINK_KEY = 'fh_link';
-function linkRead() {
-  let v = null;
-  try { v = JSON.parse(sessionStorage.getItem(LINK_KEY) || 'null'); } catch (e) { v = null; }
-  if (!v) { const m = location.hash.match(/[#&]s=([^&]+)/); if (m) { try { v = JSON.parse(decodeURIComponent(m[1])); } catch (e) { v = null; } } }
-  return v && v.v === 1 && Date.now() - (v.at || 0) < 6 * 3600e3 ? v : null;
-}
-function linkWrite(o) {
-  const v = Object.assign({ v: 1, at: Date.now() }, o);
-  try { sessionStorage.setItem(LINK_KEY, JSON.stringify(v)); return ''; } catch (e) { return '#s=' + encodeURIComponent(JSON.stringify(v)); }
-}
-function linkClear() { try { sessionStorage.removeItem(LINK_KEY); } catch { } if (location.hash) history.replaceState(null, '', location.pathname + location.search); }
-// 밖에서 들어온 판이면 그 판의 거절 횟수를 이어서 센다
-const LINK = (() => { const l = linkRead(); return l && l.dir === 'in' ? l : null; })();
+
+const Link = new Linker();
+const LINK = (() => { const l = Link.read(); return l && l.dir === 'in' ? l : null; })();
 const LINK_KILLS = LINK ? Math.max(0, LINK.kills | 0) : 0;
 // 다시하기·처음부터: 원래 게임의 시작 화면으로
-function goMainTitle() { linkClear(); location.replace('./' + location.search); }
+function goMainTitle() { Link.clear(); location.replace('./' + location.search); }
 
 // ───────────────────────── 렌더러 / 장면 ─────────────────────────
 const canvas = $('c');
@@ -4240,7 +4229,7 @@ function exitTick(dt) {
 function goOutside() {
   G.state = 'leaving';
   const shells = WEP.hasShotgun ? WEP.shotgun.mag + WEP.shotgun.res : 0;
-  const hash = linkWrite({ dir: 'out', kills: LINK_KILLS + G.kills, shells, main: LINK.main || {} });
+  const hash = Link.write({ dir: 'out', kills: LINK_KILLS + G.kills, shells, main: LINK.main || {} });
   stopAllVoices(); humStop(); sfxDragAllStop();
   if (document.pointerLockElement) document.exitPointerLock();
   location.replace('./' + location.search + hash);
@@ -4262,7 +4251,7 @@ function hudAmmo(pop) {
   if (pop) { els.ammoMag.classList.remove('pop'); void els.ammoMag.offsetWidth; els.ammoMag.classList.add('pop'); }
   setSwapIcon();
 }
-let hitT = 0;
+
 function hitMarker(kill) {
   els.hitm.classList.toggle('kill', kill);
   els.hitm.classList.remove('go'); void els.hitm.offsetWidth; els.hitm.classList.add('go');
