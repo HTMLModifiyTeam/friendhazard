@@ -1,23 +1,12 @@
 import * as THREE from 'three';
 import VOICE_DATA from './voice-data.js';
+import { $, clamp, lerp, rand, pick, TAU, approach, wrapAngle, Store } from './utils.js';
+import { easeOutCubic, easeInQuad, easeInOutSine } from './eases.js'
+
 window.__fhReady = true;
 
 // ───────────────────────── 기본 도구 ─────────────────────────
-const $ = (id) => document.getElementById(id);
-const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
-const lerp = (a, b, t) => a + (b - a) * t;
-const rand = (a, b) => a + Math.random() * (b - a);
-const pick = (arr) => arr[(Math.random() * arr.length) | 0];
-const TAU = Math.PI * 2;
-const approach = (cur, target, k, dt) => cur + (target - cur) * (1 - Math.exp(-k * dt));
-const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-const easeOutCubic = (t) => 1 - Math.pow(1 - clamp(t, 0, 1), 3);
-const easeInQuad = (t) => { t = clamp(t, 0, 1); return t * t; };
-const easeInOutSine = (t) => { t = clamp(t, 0, 1); return -(Math.cos(Math.PI * t) - 1) / 2; };
-const store = {
-  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
-  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* 저장이 막힌 환경 */ } },
-};
+const store = new Store();
 const QS = new URLSearchParams(location.search);
 // 처음엔 주 입력장치로 짐작하고, 실제로 손가락·마우스가 들어오면 그쪽으로 바꾼다
 let IS_TOUCH = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
@@ -45,6 +34,7 @@ function goMainTitle() { linkClear(); location.replace('./' + location.search); 
 
 // ───────────────────────── 렌더러 / 장면 ─────────────────────────
 const canvas = $('c');
+THREE.ColorManagement.enabled = false;
 const renderer = new THREE.WebGLRenderer({ canvas });
 const PR_MAX = Math.min(window.devicePixelRatio || 1, 2);
 let PR = PR_MAX;
@@ -101,7 +91,6 @@ const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vecto
 const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _e = new THREE.Euler();
 const _zeroM = new THREE.Matrix4().makeScale(0, 0, 0);
 const _col = new THREE.Color();
-
 
 // ───────────────────────── 소리 ─────────────────────────
 let ac = null;
@@ -173,7 +162,7 @@ function decodeVoices() {
     try {
       const p = ac.decodeAudioData(ab, (buf) => { VO[k] = buf; }, () => { });
       if (p && p.catch) p.catch(() => { });
-    } catch (e) { /* 디코드 실패는 무음으로 */ }
+    } catch { }
   }
 }
 
@@ -1818,7 +1807,7 @@ function gdoorReset() {
     g.a = g.target = g.init || 0; gdoorWrite(g);
     const shut = g.a < 0.9;
     g.wall.off = !shut;
-    if (NAV.ready) navDoorShut(g, shut, true);
+    if (NAV.ready) navDoorShut(g, shut);
     g.furnOn = g.a > 0.005; roomFurnShow(g.room, g.furnOn);
   }
 }
@@ -2334,7 +2323,7 @@ function buildNav() {
     if (g) g.navCells = cells;
   }
   NAV.ready = true;
-  for (const g of LEVEL.gdoors) if (g.a < 0.9) navDoorShut(g, true, true);
+  for (const g of LEVEL.gdoors) if (g.a < 0.9) navDoorShut(g, true);
 }
 function navDoorLine(d) {
   const out = [];
@@ -2347,7 +2336,7 @@ function navDoorLine(d) {
   }
   return out;
 }
-function navDoorShut(g, shut, force = false) {
+function navDoorShut(g, shut) {
   if (!g.navCells) return;
   if (g.navShut === shut) return;
   g.navShut = shut;
@@ -4566,7 +4555,6 @@ function startGame() {
   resetWorld();
   doorStart();
 }
-
 
 // ───────────────────────── 입력 ─────────────────────────
 const MOUSE_SENS = 0.0022, TOUCH_SENS = 0.0066;

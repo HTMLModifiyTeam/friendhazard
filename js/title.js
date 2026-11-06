@@ -1,46 +1,11 @@
 // Game runtime extracted from the original page.
 import * as THREE from 'three';
 import VOICE_DATA from './voice-data.js';
+import { $, clamp, lerp, rand, pick, TAU, rngChoice, approach, wrapAngle, angleApproach, Store } from './utils.js';
+import { easeOutCubic, easeInOutCubic, easeInQuad, easeInOutSine } from './eases.js'
 
 // ───────────────────────── 기본 도구 ─────────────────────────
-const $ = (id) => document.getElementById(id);
-const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
-const lerp = (a, b, t) => a + (b - a) * t;
-const rand = (a, b) => a + Math.random() * (b - a);
-const pick = (arr) => arr[(Math.random() * arr.length) | 0];
-const TAU = Math.PI * 2;
-const rngChoice = (a) => a[Math.floor(Math.random() * a.length)];
-const approach = (cur, target, k, dt) => cur + (target - cur) * (1 - Math.exp(-k * dt));
-const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-const angleApproach = (cur, target, k, dt) => cur + wrapAngle(target - cur) * (1 - Math.exp(-k * dt));
-const easeOutCubic = (t) => 1 - Math.pow(1 - clamp(t, 0, 1), 3);
-const easeInOutCubic = (t) => {
-  t = clamp(t, 0, 1);
-  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-};
-const easeInQuad = (t) => {
-  t = clamp(t, 0, 1);
-  return t * t;
-};
-const easeInOutSine = (t) => {
-  t = clamp(t, 0, 1);
-  return -(Math.cos(Math.PI * t) - 1) / 2;
-};
-const store = {
-  get(k, d) {
-    try {
-      const v = localStorage.getItem(k);
-      return v === null ? d : JSON.parse(v);
-    } catch (e) {
-      return d;
-    }
-  },
-  set(k, v) {
-    try {
-      localStorage.setItem(k, JSON.stringify(v));
-    } catch (e) { }
-  },
-};
+const store = new Store();
 const QS = new URLSearchParams(location.search);
 let IS_TOUCH = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) || ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
 // 집 안(1인칭 고시원, gosiwon.html)과 오가며 넘겨주는 판 상태. 같은 탭 안에서만 쓰고, 막힌 브라우저는 주소 뒤에 붙여 넘긴다.
@@ -94,7 +59,7 @@ const RETURN = (() => {
 if (RETURN) linkClear();
 
 // 에스팀랩의 온이 원본을 작은 기관 마크로만 사용한다.
-const ONI_MARK_SRC = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\" width=\"100\" height=\"100\"><defs><linearGradient id=\"agency-pink\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\"><stop offset=\"0\" stop-color=\"#fff6fa\"/><stop offset=\"1\" stop-color=\"#ffd6e4\"/></linearGradient><clipPath id=\"agency-circle\"><circle cx=\"50\" cy=\"50\" r=\"45\"/></clipPath></defs><circle cx=\"50\" cy=\"50\" r=\"48\" fill=\"#fff\"/><g clip-path=\"url(#agency-circle)\"><circle cx=\"50\" cy=\"50\" r=\"45\" fill=\"url(#agency-pink)\"/><svg x=\"6\" y=\"6\" width=\"88\" height=\"88\" viewBox=\"58 34 84 84\"><defs>\n  <linearGradient id=\"q1gl\" x1=\"0\" y1=\"0\" x2=\"1\" y2=\"0\"><stop offset=\"0\" stop-color=\"#FFFFFF\"/><stop offset=\".55\" stop-color=\"#EDF2F8\"/><stop offset=\"1\" stop-color=\"#C4D2E1\"/></linearGradient>\n  <linearGradient id=\"q1hg\" x1=\"0\" y1=\"0\" x2=\"1\" y2=\"0\"><stop offset=\"0\" stop-color=\"#D92741\"/><stop offset=\".35\" stop-color=\"#FF6478\"/><stop offset=\"1\" stop-color=\"#BF1A35\"/></linearGradient>\n  <radialGradient id=\"q1bl\" cx=\".36\" cy=\".3\" r=\".78\"><stop offset=\"0\" stop-color=\"#FF97A4\"/><stop offset=\".5\" stop-color=\"#F23A53\"/><stop offset=\"1\" stop-color=\"#B0112C\"/></radialGradient>\n  <radialGradient id=\"q1ey\" cx=\".38\" cy=\".32\" r=\".75\"><stop offset=\"0\" stop-color=\"#FFFFFF\"/><stop offset=\".72\" stop-color=\"#F4F2F8\"/><stop offset=\"1\" stop-color=\"#C9C1D8\"/></radialGradient>\n  <radialGradient id=\"q1hd\" cx=\".35\" cy=\".3\" r=\".8\"><stop offset=\"0\" stop-color=\"#FFFFFF\"/><stop offset=\"1\" stop-color=\"#C9D5E2\"/></radialGradient>\n  <linearGradient id=\"q1lid\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\"><stop offset=\"0\" stop-color=\"#E6EDF5\"/><stop offset=\"1\" stop-color=\"#D3DEEA\"/></linearGradient>\n  <filter id=\"q1bl2\" x=\"-60%\" y=\"-60%\" width=\"220%\" height=\"220%\"><feGaussianBlur stdDeviation=\"4\"/></filter>\n  <clipPath id=\"q1cl\"><path d=\"M84 56 L84 244.11 A24 24 0 1 0 116 244.11 L116 56 A16 16 0 0 0 84 56 Z\"/></clipPath>\n  <clipPath id=\"q1c1\"><circle cx=\"85\" cy=\"81\" r=\"15\"/></clipPath>\n  <clipPath id=\"q1c2\"><circle cx=\"115\" cy=\"81\" r=\"15\"/></clipPath>\n  </defs><g transform=\"rotate(-2 100 280)\"><path d=\"M85 150 Q66.5 166.6 64 188\" fill=\"none\" stroke=\"#93A7BD\" stroke-width=\"5.2\" stroke-linecap=\"round\"/>\n  <circle cx=\"64\" cy=\"188\" r=\"7\" fill=\"url(#q1hd)\" stroke=\"#8FA3B8\" stroke-width=\"1.3\"/><path d=\"M115 150 Q133.5 166.6 136 188\" fill=\"none\" stroke=\"#93A7BD\" stroke-width=\"5.2\" stroke-linecap=\"round\"/>\n  <circle cx=\"136\" cy=\"188\" r=\"7\" fill=\"url(#q1hd)\" stroke=\"#8FA3B8\" stroke-width=\"1.3\"/><ellipse cx=\"100\" cy=\"292\" rx=\"32\" ry=\"6.5\" fill=\"#3B2A55\" opacity=\".18\" filter=\"url(#q1bl2)\"/>\n  <path d=\"M84 56 L84 244.11 A24 24 0 1 0 116 244.11 L116 56 A16 16 0 0 0 84 56 Z\" fill=\"url(#q1gl)\"/>\n  <g clip-path=\"url(#q1cl)\">\n    <rect class=\"oni-liquid\" x=\"95.5\" y=\"171.0\" width=\"9\" height=\"91.0\" rx=\"4.5\" fill=\"url(#q1hg)\"/>\n    <circle cx=\"100\" cy=\"262\" r=\"20.5\" fill=\"url(#q1bl)\"/>\n    <rect x=\"109\" y=\"40\" width=\"10\" height=\"220\" fill=\"#3B2A55\" opacity=\".05\"/>\n  </g>\n  <path d=\"M104 150 H112.5\" stroke=\"#8C9FB4\" stroke-width=\"1.7\" stroke-linecap=\"round\"/><path d=\"M107 162 H112.5\" stroke=\"#8C9FB4\" stroke-width=\"1.7\" stroke-linecap=\"round\"/><path d=\"M104 174 H112.5\" stroke=\"#8C9FB4\" stroke-width=\"1.7\" stroke-linecap=\"round\"/><path d=\"M107 186 H112.5\" stroke=\"#8C9FB4\" stroke-width=\"1.7\" stroke-linecap=\"round\"/><path d=\"M104 198 H112.5\" stroke=\"#8C9FB4\" stroke-width=\"1.7\" stroke-linecap=\"round\"/><path d=\"M107 210 H112.5\" stroke=\"#8C9FB4\" stroke-width=\"1.7\" stroke-linecap=\"round\"/><path d=\"M104 222 H112.5\" stroke=\"#8C9FB4\" stroke-width=\"1.7\" stroke-linecap=\"round\"/><path d=\"M107 234 H112.5\" stroke=\"#8C9FB4\" stroke-width=\"1.7\" stroke-linecap=\"round\"/>\n  <rect x=\"88.2\" y=\"112\" width=\"4.4\" height=\"112\" rx=\"2.2\" fill=\"#fff\" opacity=\".95\"/>\n  <ellipse cx=\"92.5\" cy=\"254\" rx=\"4.6\" ry=\"7\" fill=\"#fff\" opacity=\".78\" transform=\"rotate(24 92.5 254)\"/>\n  <circle cx=\"108\" cy=\"271\" r=\"2.2\" fill=\"#fff\" opacity=\".45\"/>\n  <path d=\"M84 56 L84 244.11 A24 24 0 1 0 116 244.11 L116 56 A16 16 0 0 0 84 56 Z\" fill=\"none\" stroke=\"#9EB1C6\" stroke-width=\"1.4\" opacity=\".85\"/><ellipse cx=\"88.6\" cy=\"100\" rx=\"4.6\" ry=\"2.8\" fill=\"#FF8DA8\" opacity=\".75\"/><ellipse cx=\"111.4\" cy=\"100\" rx=\"4.6\" ry=\"2.8\" fill=\"#FF8DA8\" opacity=\".75\"/><circle cx=\"85\" cy=\"81\" r=\"15\" fill=\"url(#q1ey)\"/><g clip-path=\"url(#q1c1)\"><circle cx=\"85\" cy=\"82.5\" r=\"6.8\" fill=\"#2A1F3D\"/><circle cx=\"87.3\" cy=\"79.9\" r=\"2.3\" fill=\"#fff\"/></g><circle cx=\"85\" cy=\"81\" r=\"15\" fill=\"none\" stroke=\"#B3A8C6\" stroke-width=\"1.1\"/><circle cx=\"115\" cy=\"81\" r=\"15\" fill=\"url(#q1ey)\"/><g clip-path=\"url(#q1c2)\"><circle cx=\"115\" cy=\"82.5\" r=\"6.8\" fill=\"#2A1F3D\"/><circle cx=\"117.3\" cy=\"79.9\" r=\"2.3\" fill=\"#fff\"/></g><circle cx=\"115\" cy=\"81\" r=\"15\" fill=\"none\" stroke=\"#B3A8C6\" stroke-width=\"1.1\"/><path d=\"M72 60 Q84 54 96 59\" fill=\"none\" stroke=\"#3B2A55\" stroke-width=\"4.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><path d=\"M104 59 Q116 54 128 60\" fill=\"none\" stroke=\"#3B2A55\" stroke-width=\"4.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><path d=\"M94 106 Q100 111 106 106\" fill=\"none\" stroke=\"#3B2A55\" stroke-width=\"2.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></g></svg></g></svg>");
+const ONI_MARK_SRC = "../imgs/oniMark.svg";
 const oniMarkImage = new Image();
 oniMarkImage.src = ONI_MARK_SRC;
 await oniMarkImage.decode().catch(() => { });
@@ -2120,9 +2085,7 @@ function cnv(w, h) {
 function texOf(c, o = {}) {
   const t = new THREE.CanvasTexture(c);
   if (o.srgb !== false) t.colorSpace = THREE.SRGBColorSpace;
-  if (o.repeat) {
-    t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  }
+  if (o.repeat) t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.anisotropy = renderer.capabilities.getMaxAnisotropy ? Math.min(8, renderer.capabilities.getMaxAnisotropy()) : 4;
   return t;
 }
@@ -3180,6 +3143,14 @@ function paint(g, hex) {
   g.setAttribute('color', new THREE.BufferAttribute(a, 3));
   return g;
 }
+
+function legacyCapsule(radius, length, capSegments = 4, radialSegments = 8) {
+  const path = new THREE.Path();
+  path.absarc(0, -length / 2, radius, Math.PI * 1.5, 0);
+  path.absarc(0, length / 2, radius, 0, Math.PI * 0.5);
+  return new THREE.LatheGeometry(path.getPoints(capSegments), radialSegments);
+}
+
 const G3 = {
   sphere: (r, w = 16, h = 12) => new THREE.SphereGeometry(r, w, h),
   ell: (sx, sy, sz, w = 16, h = 12) => {
@@ -3187,7 +3158,7 @@ const G3 = {
     g.scale(sx, sy, sz);
     return g;
   },
-  cap: (r, len, rs = 12) => new THREE.CapsuleGeometry(r, len, 5, rs),
+  cap: (r, len, rs = 12) => legacyCapsule(r, len, 5, rs),
 };
 // 얼굴용 구: 앞 반구는 평면 투영 UV, 뒤 반구는 무늬 없는 한 점
 function headGeo(r, ws = 28, hs = 20) {
@@ -3840,9 +3811,7 @@ function mePart(geo, mat, parent, outline = true) {
   }
   return m;
 }
-const ME_PARTS = {
-  hands: []
-};
+const ME_PARTS = { hands: [] };
 (() => {
   // 셔츠 몸통 (텍스처: 단추, 피)
   shirtTex = texOf(shirtCanvas);
@@ -9636,9 +9605,7 @@ weaponEl.addEventListener('pointerdown', (e) => {
   weaponId = e.pointerId;
   try {
     weaponEl.setPointerCapture(e.pointerId);
-  } catch (err) {
-    
-  }
+  } catch { }
   weaponEl.classList.add('down');
   weaponDown();
 });
@@ -11244,8 +11211,7 @@ function animate(dt) {
   dangerFx(dt);
 }
 let lastNow = performance.now();
-let frameAvg = 16,
-  perfT = 0;
+let frameAvg = 16, perfT = 0;
 
 function frame(now) {
   requestAnimationFrame(frame);

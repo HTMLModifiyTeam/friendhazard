@@ -11,7 +11,8 @@
       document.getElementById('title').hidden = true;
       document.getElementById('gate').hidden = false;
       var f = document.getElementById('fade');
-      f.style.opacity = 1; f.style.visibility = 'visible';
+      f.style.opacity = 1;
+      f.style.visibility = 'visible';
     }
   } catch { }
 })();
