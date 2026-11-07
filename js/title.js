@@ -186,7 +186,7 @@ let audioWatchT = 0,
   audioBad = 0;
 
 function audioWatch(dt) {
-  if (!ac || OFFLINE) return;
+  if (!ac) return;
   audioWatchT -= dt;
   if (audioWatchT > 0) return;
   audioWatchT = 1.2;
@@ -264,31 +264,18 @@ function makeCurve(k) {
   return c;
 }
 
-function b64ToBuf(b64) {
-  const s = atob(b64),
-    n = s.length,
-    u = new Uint8Array(n);
-  for (let i = 0; i < n; i++) u[i] = s.charCodeAt(i);
-  return u.buffer;
-}
-
-function decodeVoices() {
-  let data = {};
-  try {
-    data = VOICE_DATA;
-  } catch (e) {
-    data = {};
-  }
-  for (const k of Object.keys(data)) {
-    const ab = b64ToBuf(data[k].b);
-    const done = (buf) => {
-      VO[k] = buf;
-    };
+async function decodeVoices() {
+  let data = VOICE_DATA || {};
+  await Promise.all(Object.keys(data).map(async (k) => {
     try {
-      const p = ac.decodeAudioData(ab, done, () => { });
-      if (p && p.catch) p.catch(() => { });
-    } catch (e) { }
-  }
+      const res = await fetch("voices/" + data[k].b);
+      if (!res.ok) throw new Error(res.status);
+      const ab = await res.arrayBuffer();
+      VO[k] = await ac.decodeAudioData(ab);
+    } catch (e) {
+      console.warn('Failed to load voice:', k, data[k].b, e);
+    }
+  }));
 }
 
 // ── 작은 헬퍼 ──
@@ -345,8 +332,7 @@ function outChain(vol, pan, verb) {
   }
   return g;
 }
-let OFFLINE = false;
-const ok = () => ac && (OFFLINE || ac.state === 'running');
+const ok = () => ac && (ac.state === 'running');
 // ── 효과음 수 제한 ──
 // 후반에 한꺼번에 수백 개씩 만들면 휴대폰 소리 엔진이 버티지 못한다.
 // 중요도: 3 연출(도장, 하이파이브, 알림…) / 2 내 총·칼 / 1 쓰러뜨리는 소리 / 0 잔소리(탄피, 털썩, 철퍽, 휘두름)
@@ -432,7 +418,7 @@ function sfxTink(v = 1, pan = 0) {
 }
 // 아이템 획득 '띠리링': 탄피 예산과 전투 효과음 제한에 묻히지 않는 짧은 상승음.
 function sfxItemPickup() {
-  if (!ok() || (MUTED && !OFFLINE)) return;
+  if (!ok() || MUTED) return;
   const t = ac.currentTime + 0.002, out = outChain(0.48, 0, 0), nodes = [];
   [[1318.51, 0, 0.07], [1760, 0.075, 0.07], [2637.02, 0.15, 0.16]].forEach(([f, d, decay], i) => {
     const tt = t + d;
@@ -1045,11 +1031,11 @@ function playVoice(key, o = {}) {
         g.gain.setValueAtTime(g.gain.value, t);
         g.gain.linearRampToValueAtTime(0, t + fast);
         src.stop(t + fast + 0.01);
-      } catch {}
+      } catch { }
       try {
         if (lfo) lfo.stop(t + fast + 0.02);
         if (lfo2) lfo2.stop(t + fast + 0.02);
-      } catch {}
+      } catch { }
     },
   };
   src.onended = () => {
@@ -1185,7 +1171,7 @@ let MUSIC_BUF = null,
   musicRendering = false;
 
 function renderMusicBuffer() {
-  if (MUSIC_BUF || musicRendering || !ac || OFFLINE) return;
+  if (MUSIC_BUF || musicRendering || !ac) return;
   const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
   if (!OAC) return;
   const sr = 32000,
@@ -1212,13 +1198,11 @@ function renderMusicBuffer() {
       MU: Object.assign({}, MU)
     };
     ac = off;
-    OFFLINE = true;
     Object.assign(A, R.A);
     Object.assign(MU, R.MU);
   };
   const swapOut = () => {
     ac = save.ac;
-    OFFLINE = false;
     Object.assign(A, save.A);
     Object.assign(MU, save.MU);
     save = null;
@@ -1305,7 +1289,7 @@ function musicStart(t0, fromStep = 0) {
 }
 // 실시간 연주 중에 녹음이 끝나면: 아직 안 짠 다음 16분음표부터 녹음본이 이어받는다
 function musicHandoff() {
-  if (!MU.on || MU.src || !MU.bus || !ac || OFFLINE || !MUSIC_BUF) return;
+  if (!MU.on || MU.src || !MU.bus || !ac || !MUSIC_BUF) return;
   let st = MU.step,
     t = MU.next;
   if (st < 32) return;
@@ -1916,119 +1900,6 @@ function musicStep(n, t) {
   if (X && kk === 1 && s >= 8) mTimp(t, 0.25 + (s - 8) * 0.07, 73);
   if (X && kk === 3 && s < 12 && s % 2 === 0) mTimp(t, 0.3 + s * 0.05, 73);
   if (X && kk === 2 && s === 0) mRise(t, 62, S16 * 28, 1); // 드롭 직전 한 박은 비운다 (함성과 잔향만)
-}
-
-// 테스트용: 오프라인으로 소리를 렌더해 크기(피크/RMS)를 잰다
-async function audioOfflineTest(sec, events) {
-  const saveAc = ac,
-    saveA = Object.assign({}, A),
-    saveMU = Object.assign({}, MU);
-  const off = new OfflineAudioContext(2, Math.ceil(44100 * sec), 44100);
-  ac = off;
-  OFFLINE = true;
-  A.master = ac.createGain();
-  A.master.gain.value = 0.92;
-  A.comp = ac.createDynamicsCompressor();
-  A.comp.threshold.value = -13;
-  A.comp.knee.value = 8;
-  A.comp.ratio.value = 4.5;
-  A.comp.attack.value = 0.002;
-  A.comp.release.value = 0.16;
-  A.comp.connect(A.master);
-  A.master.connect(ac.destination);
-  A.sfx = gainN(0.95);
-  A.sfx.connect(A.comp);
-  A.voice = gainN(1.05);
-  A.voice.connect(A.comp);
-  A.music = gainN(0.4);
-  A.music.connect(A.comp);
-  A.verb = ac.createConvolver();
-  A.verb.buffer = makeIR(2.3, 2.6);
-  A.verbOut = gainN(0.42);
-  A.verb.connect(A.verbOut);
-  A.verbOut.connect(A.comp);
-  A.noise = makeNoise(2.5);
-  A.shaper = makeCurve(2.4);
-  A.tap = null;
-  sfxEnds.length = 0;
-  sfxWinT = -1;
-  // 오프라인 컨텍스트는 currentTime이 0에 멈춰 있으므로, 시간 지정이 필요한 것은 suspend로 끊어서 실행
-  const fns = {
-    gun: () => sfxGun(0),
-    flesh: () => sfxFlesh(1),
-    fall: () => sfxFall(1),
-    stab: () => sfxStab(0),
-    grab: () => sfxGrab(0),
-    stamp: () => sfxStamp(),
-    sparkle: () => sfxSparkle(1),
-    impact: () => sfxImpact(ac.currentTime),
-    tink: () => sfxTink(1),
-    type: () => sfxType(),
-    splat: () => sfxSplat(1),
-    swing: () => sfxSwing(0),
-    bat: () => sfxBat(0),
-    clap: () => sfxClap(),
-    chime: () => sfxChime(),
-    pickup: () => sfxItemPickup(),
-    pno: () => playVoice('p_no', {
-      verb: 0.12
-    }),
-    heart: () => sfxHeart(1),
-    voice: (k) => playVoice(k || 'f_F2', {
-      sob: 0.028
-    }),
-    pline: () => playVoice('p_line', {
-      verb: 0.12
-    }),
-    music: () => {
-      musicStart(ac.currentTime + 0.01, 32);
-    },
-    musicStop: () => musicStop(true),
-    sgun: () => sfxShotgunOut(0),
-    pump: () => sfxPumpOut(0),
-    gdrop: () => sfxGunDrop(0, 0.05),
-    slam: () => sfxDoorSlamOut()
-  };
-  // 같은 시각(렌더 단위)에 suspend를 두 번 걸 수 없어서 묶어서 건다
-  const groups = new Map();
-  const q = (t) => Math.round(t * 44100 / 128);
-  for (const [t, name, arg] of events) {
-    const k = q(t);
-    if (!groups.has(k)) groups.set(k, []);
-    groups.get(k).push([name, arg]);
-  }
-  for (let i = 1; i * 0.05 < sec - 0.06; i++) {
-    const k = q(i * 0.05);
-    if (!groups.has(k)) groups.set(k, []);
-  }
-  for (const [k, list] of groups) {
-    off.suspend(k * 128 / 44100).then(() => {
-      for (const [name, arg] of list) fns[name](arg);
-      if (MU.on) musicTick();
-      off.resume();
-    });
-  }
-  const buf = await off.startRendering();
-  ac = saveAc;
-  OFFLINE = false;
-  Object.assign(A, saveA);
-  Object.assign(MU, saveMU);
-  clearInterval(MU.timer);
-  const L = buf.getChannelData(0),
-    R = buf.getChannelData(1);
-  const out = [];
-  const win = 4410;
-  for (let i = 0; i < L.length; i += win) {
-    let pk = 0,
-      ss = 0;
-    for (let j = i; j < Math.min(L.length, i + win); j++) {
-      const v = Math.max(Math.abs(L[j]), Math.abs(R[j]));
-      if (v > pk) pk = v;
-      ss += L[j] * L[j];
-    }
-    out.push([+(i / 44100).toFixed(1), +pk.toFixed(3), +(Math.sqrt(ss / win)).toFixed(3)]);
-  }
-  return out;
 }
 
 // ───────────────────────── 캔버스 텍스처 ─────────────────────────
@@ -5075,7 +4946,7 @@ function makeCarePosterAtlas(existing) {
           g.lineTo(288, 567);
         }
         g.stroke();
-      } 
+      }
       // 하단의 작은 발행기관 표식. 포스터 크기와 본문은 그대로 둔다.
       drawAgencyMark(g, 427, 680, 46, colors[k]);
       g.fillStyle = colors[k];
@@ -5822,9 +5693,11 @@ const G = {
 const GAME_MOD = {
   infiniteAmmo: false,
   noRecoil: false,
+  aimbot: false,
   auto: false,
   noclip: false,
-  allPowers: false
+  allPowers: false,
+  silencer: false
 };
 const ME = {
   x: 0,
@@ -5846,7 +5719,6 @@ const ME = {
   muzzle: [new THREE.Vector3(), new THREE.Vector3()],
   slotOcc: null,
   five: null,
-  isMe: true,
   turn: 0,
   turnTo: 0,
 };
@@ -6029,8 +5901,7 @@ function newPerson(x, z, opt = {}) {
     e2z: z,
   };
   if (HOUSE.on && p.state !== 'cling') houseCollide(p, 0.4);
-  if (female && kind === 0) p.voiceKey = pick(['f_F1', 'f_F2', 'f_F3', 'f_F4', 'f_F5']);
-  if (!female && kind === 0) p.voiceKey = pick(['f_M2', 'f_M3', 'f_M4', 'f_M5']);
+  if (kind === 0) p.voiceKey = pick(female ? ['f_F1', 'f_F2', 'f_F3', 'f_F4', 'f_F5'] : ['f_M2', 'f_M3', 'f_M4', 'f_M5']);
   if (opt.slot !== undefined) {
     p.slot = opt.slot;
     p.clingT = 1;
@@ -6312,7 +6183,7 @@ function makeCorpse(back) {
   return o;
 }
 
-function poseDying(p, t, o) {
+function poseDying(p, o) {
   o.set(p.corpse);
   const k = clamp(p.dieT / p.fallT, 0, 1);
   let a = easeInQuad(k) * Math.PI / 2;
@@ -6328,9 +6199,7 @@ function poseDying(p, t, o) {
   o[P.LSX] += -1.3 * fl;
   o[P.RSX] += -1.1 * fl;
   o[P.HX] += (p.back ? -0.6 : 0.5) * fl;
-  if (p.how === 'stab') {
-    o[P.HY] = lerp(C.HIP_Y, C.HIP_Y - 0.15, fl);
-  }
+  if (p.how === 'stab') o[P.HY] = lerp(C.HIP_Y, C.HIP_Y - 0.15, fl);
 }
 
 function computePose(p, t, o) {
@@ -6360,7 +6229,7 @@ function computePose(p, t, o) {
     }
     case 'dying':
     case 'dead':
-      poseDying(p, t, o);
+      poseDying(p, o);
       break;
     case 'poster':
       posePoster(p, t, o);
@@ -6946,9 +6815,7 @@ function spawnOne(kind, angle) {
     state: 'chase',
     yaw: Math.atan2(ME.x - pos.x, ME.z - pos.z)
   });
-  if (p) {
-    p.speakCD = rand(1.5, 4.5);
-  }
+  if (p) p.speakCD = rand(1.5, 4.5);
   return p;
 }
 // 양쪽에서 동시에 뛰어온다. 한쪽만 계속 쏘면 반대쪽이 빈틈을 파고든다.
@@ -7103,7 +6970,7 @@ function meSim(dt) {
     ME.stab.t += dt;
     if (!ME.stab.done && ME.stab.t >= 0.065) {
       ME.stab.done = true;
-      stabHit(ME.stab.target, ME.stab.hand);
+      stabHit(ME.stab.target);
     }
     if (ME.stab.t > 0.2) ME.stab = null;
   }
@@ -7629,22 +7496,14 @@ function fireRay(mz, dx, dz, maxT, pierce, impact, splash, shotgun) {
 function weaponDown() {
   G.firing = true;
   if (G.state !== 'play' || !G.ctrl) return;
-  if (modAuto) {
-    G.fireCD = 0;
-    if (ME.clingers.length) {
-      if (ME.stab && !ME.stab.done) return; // 이미 시작한 찌르기의 명중 시점을 되돌리지 않는다.
-      stab();
-    } else shoot();
-    return;
-  }
   // 짧게 눌렀다 떼어도 다음 프레임을 기다리지 않고 바로 반응한다.
   if (ME.clingers.length) {
     if (ME.stab && !ME.stab.done) return; // 이미 시작한 찌르기의 명중 시점을 되돌리지 않는다.
     stab();
-    G.fireCD = 0.20;
+    if (!GAME_MOD.auto) G.fireCD = 0.20;
   } else {
     shoot();
-    G.fireCD = POWERS.spread > 0 ? 0.32 : 0.235;
+    if (!GAME_MOD.auto) G.fireCD = POWERS.spread > 0 ? 0.32 : 0.235;
   }
 }
 
@@ -7654,16 +7513,16 @@ function weaponUp() {
 
 function combatSim(dt) {
   G.fireCD -= dt;
-  if (!GAME_MOD.auto || G.state !== 'play' || !G.ctrl) return;
-  if (G.fireCD > 0) return;
+  if (!GAME_MOD.aimbot || G.state !== 'play' || !G.ctrl) return;
+  if (G.fireCD > 0 && !GAME_MOD.auto) return;
   if (ME.clingers.length) {
     stab();
-    G.fireCD = 0.20;
+    if (!GAME_MOD.auto) G.fireCD = 0.20;
     return;
   }
   if (!findTarget()) return;
   shoot();
-  G.fireCD = POWERS.spread > 0 ? 0.32 : 0.235;
+  if (!GAME_MOD.auto) G.fireCD = POWERS.spread > 0 ? 0.32 : 0.235;
 }
 
 function shoot(forced) {
@@ -7722,8 +7581,7 @@ function shoot(forced) {
   fireRay(mz, dx, dz, RANGE + 2, pierce, impact, splash, spread);
   if (spread) {
     for (const a of [-.24, -.12, .12, .24]) {
-      const c = Math.cos(a),
-        s = Math.sin(a);
+      const c = Math.cos(a), s = Math.sin(a);
       fireRay(mz, dx * c + dz * s, dz * c - dx * s, pierce ? RANGE + 2 : 6.7, pierce, impact, splash, true);
     }
   }
@@ -7731,7 +7589,7 @@ function shoot(forced) {
   FLASHES[h].t = 0.05;
   FLASHES[h].sp.material.rotation = rand(0, TAU);
   ejectShell(mz.x, mz.y, mz.z, dx, dz);
-  sfxGun(pan);
+  if (!GAME_MOD.silencer) sfxGun(pan);
   if (!GAME_MOD.noRecoil) CAM.shake = Math.max(CAM.shake, 0.035);
 }
 
@@ -7811,7 +7669,7 @@ function stab() {
   }
 }
 
-function stabHit(c, hand) {
+function stabHit(c) {
   if (c.state !== 'cling') return;
   const dx = c.x - ME.x,
     dz = c.z - ME.z,
@@ -7896,9 +7754,9 @@ function shootShotgunOut(ax, ay, az) {
   SG.flashT = 0.07;
   SG.flash.material.rotation = rand(0, TAU);
   if (!GAME_MOD.infiniteAmmo) SG.shells--;
-  SG.cd = SG_CD;
+  if (!GAME_MOD.auto) SG.cd = SG_CD;
   SG.pumpT = 0;
-  sfxShotgunOut(clamp((mz.x - CAMX) / 5, -1, 1));
+  if (!GAME_MOD.silencer) sfxShotgunOut(clamp((mz.x - CAMX) / 5, -1, 1));
   if (GAME_MOD.infiniteAmmo || SG.shells > 0) {
     sfxPumpOut(0.16);
     SG.ejectT = 0.2;
@@ -8017,7 +7875,7 @@ function burstSim(dt) {
     // 매달린 사람부터 칼로 차례차례
     b.cd -= dt;
     if (b.cd <= 0 && ME.clingers.length) {
-      b.cd = 0.075;
+      if (!GAME_MOD.auto) b.cd = 0.075;
       const c = ME.clingers[0];
       const hand = SLOTS[c.slot].x >= 0 ? 0 : 1;
       ME.stab = {
@@ -8027,15 +7885,14 @@ function burstSim(dt) {
         done: true
       };
       sfxStab(hand === 0 ? 0.3 : -0.3);
-      stabHit(c, hand);
+      stabHit(c);
     }
   } else if (b.phase === 'guns') {
     // 쌍권총 난사: 가까운 사람부터, 화면 밖이어도
     b.cd -= dt;
     while (b.cd <= 0) {
       b.cd += 1 / 18;
-      let best = null,
-        bd = 16 * 16;
+      let best = null, bd = 16 * 16;
       for (const p of live) {
         if (p.state === 'dying' || p.state === 'dead') continue;
         const d = (p.x - ME.x) ** 2 + (p.z - ME.z) ** 2;
@@ -8049,15 +7906,12 @@ function burstSim(dt) {
         break;
       }
       if (best.state === 'cling' && best.host === ME) {
-        const hand = SLOTS[best.slot].x >= 0 ? 0 : 1;
-        stabHit(best, hand);
+        stabHit(best);
         continue;
       }
       shoot(best);
       if (best.state !== 'dying') {
-        const dx = best.x - ME.x,
-          dz = best.z - ME.z,
-          dl = Math.hypot(dx, dz) || 1;
+        const dx = best.x - ME.x, dz = best.z - ME.z, dl = Math.hypot(dx, dz) || 1;
         kill(best, dx / dl, dz / dl, 'shot');
       }
     }
@@ -9527,7 +9381,7 @@ canvas.addEventListener('pointerdown', (e) => {
   try {
     canvas.setPointerCapture(e.pointerId);
   } catch (err) {
-    
+
   }
   stickShow(sx0, sy0);
   e.preventDefault();
@@ -9603,7 +9457,9 @@ const modMenu = $('modMenu');
 const modClose = $('modClose');
 const modInfinite = $('modInfinite');
 const modRecoil = $('modRecoil');
+const aimbot = $('aimbot');
 const modAuto = $('modAuto');
+const silencer = $('silencer');
 const modNoclip = $('modNoclip');
 const modAllPowers = $('modAllPowers');
 
@@ -9614,7 +9470,9 @@ function setModMenu(open) {
 function syncMainMods() {
   GAME_MOD.infiniteAmmo = modInfinite.checked;
   GAME_MOD.noRecoil = modRecoil.checked;
+  GAME_MOD.aimbot = aimbot.checked;
   GAME_MOD.auto = modAuto.checked;
+  GAME_MOD.silencer = silencer.checked;
   GAME_MOD.noclip = modNoclip.checked;
   const wasAllPowers = GAME_MOD.allPowers;
   GAME_MOD.allPowers = modAllPowers.checked;
@@ -9628,7 +9486,7 @@ function syncMainMods() {
     for (const def of ITEM_DEFS) POWERS[def.key] = ITEM_DURATION;
   updateItemStatus();
 }
-for (const control of [modInfinite, modRecoil, modAuto, modNoclip, modAllPowers]) control.addEventListener('change', syncMainMods);
+for (const control of [modInfinite, modRecoil, aimbot, modAuto, modNoclip, modAllPowers, silencer]) control.addEventListener('change', syncMainMods);
 modClose.addEventListener('click', () => setModMenu(false));
 $('modRepel').addEventListener('click', () => { G.modRepelT = 5; });
 $('killAll').addEventListener('click', () => {
@@ -9650,7 +9508,7 @@ window.addEventListener('keydown', (e) => {
   } else if (FIRE_KEYS.has(e.code)) {
     if (G.state === 'play') {
       e.preventDefault();
-      if (!e.repeat || modAuto) {
+      if (!e.repeat || GAME_MOD.aimbot) {
         weaponEl.classList.add('down');
         weaponDown();
       }
@@ -10721,6 +10579,7 @@ $('mute').addEventListener('click', () => {
   audioInit();
   setMuted(!MUTED);
 });
+$('modmenubtn').addEventListener('click', () => setModMenu(modMenu.hidden));
 setMuted(MUTED);
 if (!IS_TOUCH) document.body.classList.add('desk');
 
@@ -10784,7 +10643,7 @@ function houseAppear() {
     l.href = './gosiwon.html' + location.search;
     document.head.appendChild(l);
   } catch (e) {
-    
+
   }
 }
 

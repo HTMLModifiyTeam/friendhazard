@@ -8,7 +8,8 @@
     <link rel="icon" type="image/x-icon" href="imgs/icon.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@500;700;900&family=Noto+Serif+KR:wght@400;700;900&display=swap">
+    <link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@500;700;900&family=Noto+Serif+KR:wght@400;700;900&display=swap">
     <link rel="stylesheet" href="styles/title/main.css">
     <link rel="stylesheet" href="styles/mod-menu.css">
     <script type="importmap">{"imports":{"three":"https://threejs.org/build/three.module.js"}}</script>
@@ -87,7 +88,7 @@
             <dt>특이사항</dt>
             <dd>없음</dd>
           </dl>
-          <p class="body">위 사람은 정신이 건강하므로 「특별관리 보호대상」으로 지정하나 해고함.</p>
+          <p class="body">위 사람은 정신이 건강하므로 「특별관리 보호대상」으로 지정했으나 해고함.</p>
           <div class="date" id="certDateA"></div>
           <div class="org"><span class="agency-mark" aria-hidden="true"></span><span>국가정신건강등급심사원</span></div>
         </article>
@@ -115,15 +116,26 @@
           <path d="M16.5 9.5l5 5m0-5l-5 5" stroke="#1f1a24" stroke-width="2" stroke-linecap="round" />
         </svg>
       </button>
+      <button id="modmenubtn" class="iconbtn" type="button" aria-label="모드 메뉴">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <!-- slider tracks -->
+          <path d="M4 7h9M19 7h1M4 12h1M11 12h9M4 17h6M16 17h4" fill="none" stroke="#1f1a24" stroke-width="2" stroke-linecap="round" />
+          <!-- slider knobs -->
+          <circle cx="16" cy="7" r="2.5" fill="#1f1a24" />
+          <circle cx="8" cy="12" r="2.5" fill="#1f1a24" />
+          <circle cx="13" cy="17" r="2.5" fill="#1f1a24" />
+        </svg>
+      </button>
       <section id="modMenu" class="mod-menu" hidden aria-label="Modifier menu">
         <header><strong>MOD MENU</strong><button id="modClose" type="button" aria-label="Close">×</button></header>
         <div class="mod-options">
           <label class="mod-toggle"><span>Infinite ammo</span><input id="modInfinite" type="checkbox"></label>
           <label class="mod-toggle"><span>No recoil</span><input id="modRecoil" type="checkbox"></label>
-          <label class="mod-toggle"><span>Auto fire</span><input id="modAuto" type="checkbox"></label>
+          <label class="mod-toggle"><span>Aimbot</span><input id="aimbot" type="checkbox"></label>
+          <label class="mod-toggle"><span>Automatic</span><input id="modAuto" type="checkbox"></label>
+          <label class="mod-toggle"><span>Silencer</span><input id="silencer" type="checkbox"></label>
           <label class="mod-toggle"><span>Noclip</span><input id="modNoclip" type="checkbox"></label>
-          <label class="mod-toggle"><span>All powerups · ∞ duration</span><input id="modAllPowers"
-              type="checkbox"></label>
+          <label class="mod-toggle"><span>All powerups</span><input id="modAllPowers" type="checkbox"></label>
         </div>
         <button id="modRepel" class="mod-action" type="button">Push crowd away</button>
         <button id="killAll" class="mod-action" type="button">Kill All</button>

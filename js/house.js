@@ -133,21 +133,19 @@ function makeCurve(k) {
   for (let i = 0; i < n; i++) { const x = i / (n - 1) * 2 - 1; c[i] = Math.tanh(x * k) / Math.tanh(k); }
   return c;
 }
-function b64ToBuf(b64) {
-  const s = atob(b64), n = s.length, u = new Uint8Array(n);
-  for (let i = 0; i < n; i++) u[i] = s.charCodeAt(i);
-  return u.buffer;
-}
-function decodeVoices() {
-  let data = {};
-  try { data = VOICE_DATA; } catch (e) { data = {}; }
-  for (const k of Object.keys(data)) {
-    const ab = b64ToBuf(data[k].b);
+
+async function decodeVoices() {
+  let data = VOICE_DATA || {};
+  await Promise.all(Object.keys(data).map(async (k) => {
     try {
-      const p = ac.decodeAudioData(ab, (buf) => { VO[k] = buf; }, () => { });
-      if (p && p.catch) p.catch(() => { });
-    } catch { }
-  }
+      const res = await fetch("voices/" + data[k].b);
+      if (!res.ok) throw new Error(res.status);
+      const ab = await res.arrayBuffer();
+      VO[k] = await ac.decodeAudioData(ab);
+    } catch (e) {
+      console.warn('Failed to load voice:', k, data[k].b, e);
+    }
+  }));
 }
 
 function gainN(v) { const g = ac.createGain(); g.gain.value = v; return g; }
@@ -3093,7 +3091,7 @@ function vmLayout() {
 }
 
 // ── 무기 상태 ──
-const GUN_MOD = { damage: 1, rate: 1, infiniteAmmo: false, noRecoil: false, auto: false, noclip: false };
+const GUN_MOD = { damage: 1, rate: 1, infiniteAmmo: false, noRecoil: false, auto: false, noclip: false, silencer: false };
 let crowdRepelT = 0;
 const WEP = {
   cur: 'pistol', hasShotgun: false,
@@ -3183,7 +3181,7 @@ function tryFire() {
       melee(); return;
     }
     if (!GUN_MOD.infiniteAmmo) ps.mag[h]--; ps.hand = 1 - h; WEP.fireQ = 0;
-    ps.cd = (INPUT.trigger ? 0.13 : 0.2) / GUN_MOD.rate;
+    if (!GUN_MOD.auto) ps.cd = (INPUT.trigger ? 0.13 : 0.2);
     shootPistol(h);
     hudAmmo(true);
     if (pistolLoaded() === 0 && ps.res > 0) later(0.26, () => { if (WEP.cur === 'pistol' && pistolLoaded() === 0) startReload(); });
@@ -3194,7 +3192,9 @@ function tryFire() {
       if (sg.res > 0) { startReload(); return; }
       switchWeapon('pistol'); return;
     }
-    if (!GUN_MOD.infiniteAmmo) sg.mag--; sg.cd = 0.86 / GUN_MOD.rate; sg.pumpQ = 0.24; WEP.fireQ = 0;
+    if (!GUN_MOD.infiniteAmmo) sg.mag--;
+    if (!GUN_MOD.auto) sg.cd = 0.86;
+    sg.pumpQ = 0.24; WEP.fireQ = 0;
     shootShotgun();
     hudAmmo(true);
   }
@@ -3273,7 +3273,7 @@ function shootPistol(h) {
   const arm = VM.arms[h];
   arm.rec = GUN_MOD.noRecoil ? 0 : 1; arm.flashT = 0.055; arm.slideT = 0.09;
   arm.flash.material.rotation = rand(0, TAU); const fs = rand(0.085, 0.12); arm.flash.scale.set(fs, fs, 1);
-  sfxPistol(h ? -0.25 : 0.25);
+  if (!GUN_MOD.silencer) sfxPistol(h ? -0.25 : 0.25);
   if (!GUN_MOD.noRecoil) { PL.kick += 0.026; PL.kickYaw += rand(-0.006, 0.006); }
   const moving = Math.hypot(PL.vx, PL.vz) > 0.6;
   aimRay(GUN_MOD.noRecoil ? 0 : 0.006 + WEP.bloom + (moving ? 0.012 : 0));
@@ -3281,13 +3281,13 @@ function shootPistol(h) {
   bulletHit(100, 38, 26, 1.1, 'pistol');
   muzzleLight(1.3);
   ejectShell(h ? -1 : 1);
-  noiseAlert(16);
+  if (!GUN_MOD.silencer) noiseAlert(16);
 }
 function shootShotgun() {
   const s = VM.shot;
   s.rec = GUN_MOD.noRecoil ? 0 : 1; s.flashT = 0.07;
   s.flash.material.rotation = rand(0, TAU);
-  sfxShotgun();
+  if (!GUN_MOD.silencer) sfxShotgun();
   if (!GUN_MOD.noRecoil) { PL.kick += 0.06; PL.kickYaw += rand(-0.01, 0.01); PL.shake = Math.max(PL.shake, 0.5); }
   const hits = new Map();
   for (let i = 0; i < 9; i++) {
@@ -3296,7 +3296,7 @@ function shootShotgun() {
     if (r) hits.set(r.p, (hits.get(r.p) || 0) + 1);
   }
   muzzleLight(2.4);
-  noiseAlert(22);
+  if (!GUN_MOD.silencer) noiseAlert(22);
 }
 // 칼: 붙잡혔을 때 보고 있는 쪽에 붙은 사람부터
 function stab() {
@@ -4630,40 +4630,38 @@ function keysToVec() {
 const modMenu = $('modMenu');
 const modClose = $('modClose');
 const damageRange = $('modDamage');
-const rateRange = $('modRate');
 const damageValue = $('modDamageValue');
-const rateValue = $('modRateValue');
 const modInfinite = $('modInfinite');
 const modRecoil = $('modRecoil');
 const modAuto = $('modAuto');
 const modNoclip = $('modNoclip');
+const silencer = $('silencer');
 function setModMenu(open) {
   modMenu.hidden = !open;
   if (open) damageRange.focus({ preventScroll: true });
 }
 function syncModValues() {
   GUN_MOD.damage = Number(damageRange.value);
-  GUN_MOD.rate = Number(rateRange.value);
   GUN_MOD.infiniteAmmo = modInfinite.checked;
   GUN_MOD.noRecoil = modRecoil.checked;
   GUN_MOD.auto = modAuto.checked;
   GUN_MOD.noclip = modNoclip.checked;
+  GUN_MOD.silencer = silencer.checked;
+
   if (GUN_MOD.infiniteAmmo) {
     WEP.pistol.mag = [WEP.pistol.size, WEP.pistol.size]; WEP.pistol.reloadT = 0;
     WEP.shotgun.mag = WEP.shotgun.size; WEP.shotgun.reloadT = 0;
     hudAmmo(true);
   }
   damageValue.textContent = GUN_MOD.damage.toFixed(1) + '×';
-  rateValue.textContent = GUN_MOD.rate.toFixed(2) + '×';
 }
 damageRange.addEventListener('input', syncModValues);
-rateRange.addEventListener('input', syncModValues);
-for (const control of [modInfinite, modRecoil, modAuto, modNoclip]) control.addEventListener('change', syncModValues);
+for (const control of [modInfinite, modRecoil, modAuto, modNoclip, silencer]) control.addEventListener('change', syncModValues);
 modClose.addEventListener('click', () => setModMenu(false));
 $('modRepel').addEventListener('click', () => { crowdRepelT = 5; });
 $('killAll').addEventListener('click', () => {
   for (const p of [...live])
-    if (p.state !== 'dying' && p.state !== 'dead') killPerson(p, 'shot', 0, 1, 100);
+    if (p.state !== 'dying' && p.state !== 'dead') killPerson(p, 'shot', 0, 1, 0);
 });
 syncModValues();
 
@@ -4769,6 +4767,7 @@ for (const [id, fn] of [['reload', () => startReload()], ['swap', () => switchWe
   const up = () => el.classList.remove('down');
   el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up); el.addEventListener('pointerleave', up);
 }
+$('modmenubtn').addEventListener('click', () => setModMenu(modMenu.hidden));
 $('mute').addEventListener('click', () => setMuted(!MUTED));
 $('mute').classList.toggle('muted', MUTED);
 $('start').addEventListener('click', () => { requestLock(); startGame(); });

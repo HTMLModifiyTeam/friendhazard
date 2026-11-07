@@ -3,8 +3,6 @@
 (function () {
   'use strict';
 
-  var $ = (id) => (id);
-
   function readLink() {
     var raw = null;
     try { raw = sessionStorage.getItem('fh_link'); } catch { }

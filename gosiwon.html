@@ -118,22 +118,32 @@
           <path d="M16.5 9.5l5 5m0-5l-5 5" stroke="#1f1a24" stroke-width="2" stroke-linecap="round" />
         </svg>
       </button>
-      <button id="pauseBtn" class="iconbtn" type="button" aria-label="일시정지" hidden><svg viewBox="0 0 24 24"
+      <button id="pauseBtn" class="iconbtn" type="button" aria-label="일시정지" hidden>
+        <svg viewBox="0 0 24 24"
           aria-hidden="true">
           <rect x="6" y="5" width="4" height="14" rx="1" fill="#1f1a24" />
           <rect x="14" y="5" width="4" height="14" rx="1" fill="#1f1a24" />
-        </svg></button>
+        </svg>
+      </button>
+      <button id="modmenubtn" class="iconbtn" type="button" aria-label="모드 메뉴">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <!-- slider tracks -->
+          <path d="M4 7h9M19 7h1M4 12h1M11 12h9M4 17h6M16 17h4" fill="none" stroke="#1f1a24" stroke-width="2" stroke-linecap="round" />
+          <!-- slider knobs -->
+          <circle cx="16" cy="7" r="2.5" fill="#1f1a24" />
+          <circle cx="8" cy="12" r="2.5" fill="#1f1a24" />
+          <circle cx="13" cy="17" r="2.5" fill="#1f1a24" />
+        </svg>
+      </button>
       <section id="modMenu" class="mod-menu" hidden aria-label="무기 개조 메뉴">
         <header><strong>MOD MENU</strong><button id="modClose" type="button" aria-label="닫기">×</button></header>
-        <label class="mod-control"><span>공격력 <output id="modDamageValue">1.0×</output></span><input id="modDamage"
-            type="range" min="1" max="5" step="0.5" value="1" aria-label="공격력 배율"></label>
-        <label class="mod-control"><span>연사 속도 <output id="modRateValue">1.00×</output></span><input id="modRate"
-            type="range" min="1" max="3" step="0.25" value="1" aria-label="연사 속도 배율"></label>
+        <label class="mod-control"><span>ATK <output id="modDamageValue">1.0×</output></span><input id="modDamage" type="range" min="1" max="5" step="0.5" value="1" aria-label="공격력 배율"></label>
         <div class="mod-options">
           <label class="mod-toggle"><span>Infinite ammo</span><input id="modInfinite" type="checkbox"></label>
           <label class="mod-toggle"><span>No recoil</span><input id="modRecoil" type="checkbox"></label>
-          <label class="mod-toggle"><span>Auto fire</span><input id="modAuto" type="checkbox"></label>
+          <label class="mod-toggle"><span>Automatic</span><input id="modAuto" type="checkbox"></label>
           <label class="mod-toggle"><span>Noclip</span><input id="modNoclip" type="checkbox"></label>
+          <label class="mod-toggle"><span>Silencer</span><input id="silencer" type="checkbox"></label>
         </div>
         <button id="modRepel" class="mod-action" type="button">Push crowd away</button>
         <button id="killAll" class="mod-action" type="button">Kill All</button>

@@ -948,6 +948,12 @@ body:not(.touch) #touchUI {
   z-index: 6;
 }
 
+#modmenubtn {
+  left: calc(14px + var(--safe-l));
+  top: calc(62px + var(--safe-t));
+  z-index: 6;
+}
+
 #pauseBtn {
   left: calc(66px + var(--safe-l));
   top: calc(12px + var(--safe-t));

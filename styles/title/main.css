@@ -727,6 +727,12 @@ body {
   height: 22px;
 }
 
+#modmenubtn {
+  left: calc(14px + var(--safe-l));
+  top: calc(62px + var(--safe-t));
+  z-index: 6;
+}
+
 #mute {
   left: calc(14px + var(--safe-l));
   top: calc(12px + var(--safe-t));
