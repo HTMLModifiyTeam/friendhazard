@@ -1,7 +1,5 @@
 export default class Linker {
-  constructor(key = 'fh_link') {
-    this.LINK_KEY = key;
-  }
+  LINK_KEY = 'fh_link'
 
   read() {
     let v = null;

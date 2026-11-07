@@ -1,20 +1,40 @@
-// Lightweight page bootstrap and load-failure notice.
+// Lightweight page bootstrap, offline check and load-failure notice.
 // 집(gosiwon.html)에서 막 나왔으면 시작 화면을 건너뛰고 하얀 화면에서 이어 간다
 (function () {
-  try {
-    var v = JSON.parse(sessionStorage.getItem('fh_link') || 'null');
-    if (!v) {
+  'use strict';
+
+  var $ = (id) => (id);
+
+  function readLink() {
+    var raw = null;
+    try { raw = sessionStorage.getItem('fh_link'); } catch { }
+    if (!raw) {
       var m = location.hash.match(/[#&]s=([^&]+)/);
-      if (m) v = JSON.parse(decodeURIComponent(m[1]));
+      if (m) raw = decodeURIComponent(m[1]);
     }
-    if (v && v.v === 1 && v.dir === 'out' && Date.now() - (v.at || 0) < 6 * 3600e3) document.documentElement.classList.add('linkout');
-  } catch (e) { }
-})();
-// 3D 라이브러리를 못 불러오면 안내
-setTimeout(function () {
-  if (!window.__fh) {
-    var e = document.getElementById('err');
-    e.textContent = '게임을 불러오지 못했습니다. 인터넷 연결을 확인하고 새로고침해 주세요.';
-    e.hidden = false;
+    return raw ? JSON.parse(raw) : null;
   }
-}, 12000);
+
+  try {
+    var v = readLink();
+    var fresh = v && Date.now() - (Number(v.at) || 0) < 6 * 3600e3;
+    if (v && v.v === 1 && v.dir === 'out' && fresh) document.documentElement.classList.add('linkout');
+  } catch { }
+
+  const MSG_OFFLINE = '인터넷에 연결되어 있지 않습니다. 연결을 확인해 주세요.';
+
+  function showError(text) {
+    const el = document.getElementById('err');
+    if (!el) return;
+    el.textContent = text;
+    el.hidden = false;
+  }
+
+  window.addEventListener('load', () => {
+    if (navigator.onLine) return;
+    showError(MSG_OFFLINE);
+  });
+
+  window.addEventListener('offline', () => { showError(MSG_OFFLINE); });
+  window.addEventListener('online', () => { location.reload(); });
+})();

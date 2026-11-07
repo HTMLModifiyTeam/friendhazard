@@ -3,7 +3,6 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-    <meta name="description" content="인간들의 정신건강이 악화되어 정신건강한 사람이 희귀해진 근미래, 정신건강 0급인 나에게 사람들이 친구해 달라며 몰려온다.">
     <meta name="theme-color" content="#ffffff">
     <title>친구하자드</title>
     <link rel="icon" type="image/x-icon" href="imgs/icon.svg">
@@ -11,8 +10,8 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@500;700;900&family=Noto+Serif+KR:wght@400;700;900&display=swap">
     <link rel="stylesheet" href="styles/title/main.css">
-    <link rel="stylesheet" href="styles/house/mod-menu.css">
-    <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.176.0/build/three.module.js"}}</script>
+    <link rel="stylesheet" href="styles/mod-menu.css">
+    <script type="importmap">{"imports":{"three":"https://threejs.org/build/three.module.js"}}</script>
   </head>
 
   <body>
@@ -127,7 +126,8 @@
               type="checkbox"></label>
         </div>
         <button id="modRepel" class="mod-action" type="button">Push crowd away</button>
-        <small>Press the backtick key to open or close</small>
+        <button id="killAll" class="mod-action" type="button">Kill All</button>
+        <small>백틱 키로 열기 / 닫기</small>
       </section>
       <div id="err" hidden></div>
     </div>

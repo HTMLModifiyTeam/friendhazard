@@ -4,15 +4,10 @@ import Linker from './links.js';
 import { $, clamp, lerp, rand, pick, TAU, approach, wrapAngle, Store } from './utils.js';
 import { easeOutCubic, easeInQuad, easeInOutSine } from './eases.js'
 
-window.__fhReady = true;
-
 // ───────────────────────── 기본 도구 ─────────────────────────
 const store = new Store();
-const QS = new URLSearchParams(location.search);
 // 처음엔 주 입력장치로 짐작하고, 실제로 손가락·마우스가 들어오면 그쪽으로 바꾼다
 let IS_TOUCH = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
-if (QS.has('desk')) IS_TOUCH = false;
-if (QS.has('touch')) IS_TOUCH = true;
 document.body.classList.toggle('touch', IS_TOUCH);
 
 const Link = new Linker();
@@ -174,8 +169,7 @@ function outChain(vol, pan, verb, lp) {
   if (verb && verb > 0.05) { const s = gainN(verb); g.connect(s); s.connect(A.verb); }
   return head;
 }
-let OFFLINE = false;
-const ok = () => ac && (OFFLINE || ac.state === 'running');
+const ok = () => ac && ac.state === 'running';
 // 동시에 너무 많이 울리면 휴대폰 소리 엔진이 버티지 못한다.
 const SFX_MAX = 22;
 const sfxEnds = [];
@@ -434,7 +428,7 @@ function dragVoice() {
   return { n, sq, sqB, sqG, lp, g, pn, p: null, lv: 0, target: 0, pan: 0, occl: false, ph: rand(0, 10), sqT: rand(0.4, 1.5) };
 }
 function dragAssign(items, dt = 1 / 60) {
-  if (!ok() || OFFLINE) return;
+  if (!ok()) return;
   const t = ac.currentTime;
   for (const v of DRAG.v) if (v.p && !items.some((it) => it.p === v.p)) v.p = null;
   for (const it of items) {
@@ -474,14 +468,7 @@ function sfxDragStop(p) {
   for (const v of DRAG.v) if (v.p === p) { v.p = null; v.lv = 0; try { v.g.gain.setTargetAtTime(0, ac.currentTime, 0.03); } catch { } }
 }
 function sfxDragAllStop() { if (!ac) return; for (const v of DRAG.v) { v.p = null; v.lv = 0; try { v.g.gain.setTargetAtTime(0, ac.currentTime, 0.03); } catch { } } }
-// 소리 확인용 (오프라인): 한 번 쓰윽 끌려오는 소리
-function sfxDragDemo(dur = 1.4) {
-  const v = dragVoice(), t = ac.currentTime;
-  v.g.gain.setValueAtTime(0.0001, t); v.g.gain.linearRampToValueAtTime(0.55, t + 0.25); v.g.gain.setValueAtTime(0.55, t + dur - 0.3); v.g.gain.linearRampToValueAtTime(0.0001, t + dur);
-  v.sq.frequency.setValueAtTime(950, t + 0.5); v.sq.frequency.exponentialRampToValueAtTime(640, t + 0.62);
-  v.sqG.gain.setValueAtTime(0.0001, t + 0.5); v.sqG.gain.exponentialRampToValueAtTime(0.4, t + 0.512); v.sqG.gain.exponentialRampToValueAtTime(0.0001, t + 0.62);
-  v.n.stop(t + dur + 0.05); v.sq.stop(t + dur + 0.05);
-}
+
 // 방문이 벽까지 쾅 열림: 나무 울림 + 낮은 쿵 + 손잡이 덜컹
 function sfxDoorBang(pan = 0, v = 1, lp = 0) {
   if (!sfxGate(2, 0.5)) return;
@@ -3859,7 +3846,7 @@ function crowdTick(dt) {
 }
 // 누운 사람이 끌려오는 소리: 가까운 셋까지 (발목을 잡고 내게 끌려올 때도)
 function dragTick(dt) {
-  if (!ac || OFFLINE) return;
+  if (!ac) return;
   const list = [];
   if (G.state === 'play') for (const p of live) {
     if (p.kind !== 2) continue;
@@ -4674,6 +4661,10 @@ rateRange.addEventListener('input', syncModValues);
 for (const control of [modInfinite, modRecoil, modAuto, modNoclip]) control.addEventListener('change', syncModValues);
 modClose.addEventListener('click', () => setModMenu(false));
 $('modRepel').addEventListener('click', () => { crowdRepelT = 5; });
+$('killAll').addEventListener('click', () => {
+  for (const p of [...live])
+    if (p.state !== 'dying' && p.state !== 'dead') killPerson(p, 'shot', 0, 1, 100);
+});
 syncModValues();
 
 window.addEventListener('keydown', (e) => {
@@ -4837,7 +4828,7 @@ let lastT = performance.now();
 function frame(now) {
   requestAnimationFrame(frame);
   const raw = Math.min(0.1, Math.max(0, (now - lastT) / 1000)); lastT = now;
-  if (PAUSED || window.__fhManual) return;
+  if (PAUSED) return;
   if (G.state === 'play') perfTick(raw);
   tick(Math.min(0.05, raw));
   render();
@@ -4857,46 +4848,6 @@ try {
 } catch { }
 $('start').disabled = false;
 $('loading').hidden = true;
+
 if (LINK) gateShow();
 requestAnimationFrame(frame);
-
-// 시험용 손잡이
-window.__fh = {
-  G, PL, WEP, live, FIX, LF, LEVEL, DOORS, renderer, camera, NAV, navIdx, navFree, losClear, startReload, switchWeapon, DOOR, FRONT, INPUT,
-  start: startGame, gate: gateShow, gateOpen, LINK, LINK_KILLS, skip: () => { if (G.state === 'door') { DS.t = 4.1; DS.fading = false; enterHouse(); } },
-  tp(x, z, yaw, pitch) { PL.x = x; PL.z = z; if (yaw !== undefined) PL.yaw = yaw; if (pitch !== undefined) PL.pitch = pitch; PL.y = floorAt(x, z); PL.eye = PL.y + EYE; applyCamera(0); },
-  look(yaw, pitch) { PL.yaw = yaw; PL.pitch = pitch || 0; },
-  move(x, z) { INPUT.keys.x = x; INPUT.keys.z = z; },
-  fire(on) { INPUT.fire = !!on; if (on) INPUT.trigger = true; },
-  event: () => { LEVEL.gun.taken = true; LEVEL.gun.m.visible = false; LEVEL.gun.spark.visible = false; WEP.hasShotgun = true; switchWeapon('shotgun'); startEvent(); },
-  sim(sec, step = 1 / 60) { const n = Math.round(sec / step); for (let i = 0; i < n; i++) tick(step); render(); },
-  render, tick,
-  prof() { const gl = renderer.getContext(); const t0 = performance.now(); renderer.clear(); renderer.render(scene, camera); gl.finish(); const t1 = performance.now(); renderer.clearDepth(); renderer.render(vmScene, vmCamera); gl.finish(); const t2 = performance.now(); return { world: t1 - t0, vm: t2 - t1, calls: renderer.info.render.calls }; },
-  info() { return { calls: renderer.info.render.calls, tris: renderer.info.render.triangles, live: live.length, state: G.state, kills: G.kills, pressure: PL.pressure, clingers: PL.clingers.length, x: PL.x, z: PL.z, L: lfAtCPU(PL.x, PL.z), ammo: [WEP.pistol.mag.join('+'), WEP.pistol.res, WEP.shotgun.mag, WEP.shotgun.res], cur: WEP.cur }; },
-  // 효과음을 소리 없이 렌더해서 파형을 돌려줌 (시험용)
-  async renderSfx(name, dur = 1.5) {
-    const saveAc = ac, saveA = Object.assign({}, A), saveHum = Object.assign({}, HUM);
-    const off = new OfflineAudioContext(2, Math.ceil(44100 * dur), 44100);
-    ac = off; OFFLINE = true; sfxEnds.length = 0; sfxWinT = -1; sfxWinN = 0; tinkBudget = 0;
-    A.master = off.createGain(); A.master.gain.value = 0.95;
-    A.comp = off.createDynamicsCompressor(); A.comp.threshold.value = -12; A.comp.knee.value = 8; A.comp.ratio.value = 4.5; A.comp.attack.value = 0.002; A.comp.release.value = 0.16;
-    A.comp.connect(A.master); A.master.connect(off.destination);
-    A.sfx = off.createGain(); A.sfx.gain.value = 0.95; A.sfx.connect(A.comp);
-    A.voice = off.createGain(); A.voice.connect(A.comp);
-    A.verb = off.createConvolver(); A.verb.buffer = makeIR(1.5, 3.1); A.verbOut = off.createGain(); A.verbOut.gain.value = 0.5; A.verb.connect(A.verbOut); A.verbOut.connect(A.comp);
-    A.noise = makeNoise(2.5); A.shaper = makeCurve(2.4); A.shaperHard = makeCurve(4.5);
-    const fns = { pistol: () => sfxPistol(0.2), shotgun: () => sfxShotgun(), pump: () => sfxPump(), mag: () => { sfxMagOut(); sfxMagIn(0.4); sfxSlide(0.75); }, flesh: () => sfxFlesh(1), head: () => sfxHead(), stab: () => sfxStab(), grab: () => sfxGrab(), step: () => { sfxStep('carpet'); }, vstep: () => { sfxStep('vinyl'); }, drag: () => sfxDragDemo(1.4), bang: () => sfxDoorBang(0, 1), chair: () => sfxChair(0, 1), lock: () => sfxLock(0.05), creak: () => sfxCreak(0.05, 2.4, 1, 140), sensor: () => sfxSensor(0.05), rattle: () => sfxRattle(), flick: () => sfxFlick(1), breaker: () => sfxBreaker(), getgun: () => sfxGetGun(), ammo: () => sfxAmmo(), wall: () => sfxWallHit(1), heart: () => sfxHeart(1), out: () => sfxOut(), hum: () => { HUM.on = false; humStart(); humSet(1, true); } };
-    try { fns[name](); } catch (e) { ac = saveAc; OFFLINE = false; Object.assign(A, saveA); return { err: e.message }; }
-    const buf = await off.startRendering();
-    ac = saveAc; OFFLINE = false; Object.assign(A, saveA); Object.assign(HUM, saveHum);
-    const d = buf.getChannelData(0), d2 = buf.getChannelData(1);
-    let peak = 0, sum = 0, nan = 0, last = 0;
-    for (let i = 0; i < d.length; i++) { const v = Math.max(Math.abs(d[i]), Math.abs(d2[i])); if (!Number.isFinite(v)) nan++; else { peak = Math.max(peak, v); sum += v * v; if (v > 0.01) last = i; } }
-    const step = 32, env = [];
-    for (let i = 0; i < d.length; i += step) env.push(Math.round(Math.abs(d[i]) * 1000) / 1000);
-    return { peak, rms: Math.sqrt(sum / d.length), nan, tail: last / 44100, env: Array.from(d.filter((_, i) => i % 4 === 0)) };
-  },
-  clear() { clearCrowd(); PL.clingers.length = 0; PL.pressure = 0; },
-  panOf, quickTurn,
-  spawn(x, z, kind = 0, state = 'chase') { return newPerson(x, z, { kind, state, yaw: Math.atan2(PL.x - x, PL.z - z) }); },
-};

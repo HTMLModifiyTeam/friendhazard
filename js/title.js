@@ -7,7 +7,6 @@ import { easeOutCubic, easeInOutCubic, easeInQuad, easeInOutSine } from './eases
 
 // ───────────────────────── 기본 도구 ─────────────────────────
 const store = new Store();
-const QS = new URLSearchParams(location.search);
 let IS_TOUCH = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) || ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
 
 const Link = new Linker();
@@ -83,8 +82,7 @@ const OUTLINE = {
   }
 };
 
-let VW = 1,
-  VH = 1;
+let VW = 1, VH = 1;
 const _bufSize = new THREE.Vector2();
 
 function onResize() {
@@ -5815,7 +5813,6 @@ const G = {
   movedOnce: false,
   firedOnce: false,
   stabbedOnce: false,
-  bot: QS.has('bot'),
   allyNext: 0,
   allyT: 14,
   allyKills: 0,
@@ -9633,8 +9630,10 @@ function syncMainMods() {
 }
 for (const control of [modInfinite, modRecoil, modAuto, modNoclip, modAllPowers]) control.addEventListener('change', syncMainMods);
 modClose.addEventListener('click', () => setModMenu(false));
-$('modRepel').addEventListener('click', () => {
-  G.modRepelT = 5;
+$('modRepel').addEventListener('click', () => { G.modRepelT = 5; });
+$('killAll').addEventListener('click', () => {
+  for (const p of [...live])
+    if (p.state !== 'dying' && p.state !== 'dead') kill(p, 0, 1, 'shot');
 });
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Backquote') {
@@ -11094,26 +11093,7 @@ function simulate(dt) {
   updateTypers(dt);
   updateResult(dt);
   // 입력 합치기
-  let ix = G.stick.x + G.keys.x,
-    iz = G.stick.z + G.keys.z;
-  if (G.bot && G.state === 'play') {
-    // 테스트용 자동 조작: 대부분 쏘고, 가끔 손을 떼고 걸음. 갇힌 동료가 있으면 그쪽으로
-    const ph = (G.t % 6) / 6;
-    G.firing = G.bot === 2 ? true : ph < 0.8; // 2: 쉬지 않고 쏘는 부지런한 사람
-    ix = Math.cos(G.t * 0.45) * 0.9;
-    iz = Math.sin(G.t * 0.62) * 0.9;
-    const tr = G.trapped;
-    if (tr && tr.state === 'trapped') {
-      const dx = tr.x - ME.x,
-        dz = tr.z - ME.z,
-        d = Math.hypot(dx, dz);
-      if (d > 2.6) {
-        ix = dx / d;
-        iz = dz / d;
-        G.firing = G.bot === 2 ? (ph % 0.5) < 0.3 : ph < 0.45;
-      }
-    }
-  }
+  let ix = G.stick.x + G.keys.x, iz = G.stick.z + G.keys.z;
   const l = Math.hypot(ix, iz);
   if (l > 1) {
     ix /= l;
@@ -11247,133 +11227,3 @@ if (RETURN) setupReturn(RETURN);
 else posterSetup();
 camUpdate(0.016);
 requestAnimationFrame(frame);
-
-// 테스트용 훅
-window.__fh = {
-  G,
-  ME,
-  live,
-  persons,
-  CAM,
-  SLOTS,
-  ALLIES,
-  newPerson,
-  tryCling,
-  audioOfflineTest,
-  VO,
-  items: {
-    defs: ITEM_DEFS,
-    field: FIELD_ITEMS,
-    buffs: POWERS,
-    spawn: spawnItem,
-    grant: takePower,
-    clear: clearItems
-  },
-  shoot,
-  rayHits,
-  step(dt) {
-    simulate(dt);
-    animate(dt);
-    camUpdate(dt);
-    updateBubbles(dt);
-    updateArrow();
-  },
-  sim(sec, step = 1 / 30) {
-    const n = Math.round(sec / step);
-    for (let i = 0; i < n; i++) {
-      simulate(step);
-      animate(step);
-      camUpdate(step);
-      updateBubbles(step);
-    }
-    updateArrow();
-    renderer.render(scene, camera);
-  },
-  render() {
-    camUpdate(0.001);
-    updateArrow();
-    renderer.render(scene, camera);
-  },
-  spawnAlly(k) {
-    const a = ALLIES[k === undefined ? G.allyNext : k];
-    spawnTrapped(a);
-    G.allyNext = Math.max(G.allyNext, a.k + 1);
-    return a;
-  },
-  freeAlly(k) {
-    const a = ALLIES[k];
-    for (const c of [...a.clingers]) kill(c, 0, 1, 'shot');
-    for (const p of [...live])
-      if ((p.state === 'chase' || p.state === 'press' || p.state === 'cling') && p.host === a) kill(p, 0, 1, 'shot');
-    return a;
-  },
-  info() {
-    const r = renderer.info.render;
-    return {
-      calls: r.calls,
-      tris: r.triangles,
-      geos: renderer.info.memory.geometries,
-      tex: renderer.info.memory.textures,
-      progs: renderer.info.programs.length,
-      qStep,
-      PR,
-      audioBad
-    };
-  },
-  outburst: () => startOutburst(),
-  poster: POSTER,
-  posterSetup,
-  posterTune(o, keep) {
-    if (!keep) POSTER.T = JSON.parse(JSON.stringify(POSTER.T0));
-    deepMerge(POSTER.T, o);
-    posterLayout();
-  },
-  musicReady: () => !!MUSIC_BUF,
-  musicDbg: () => ({
-    rendering: musicRendering,
-    buf: !!MUSIC_BUF,
-    len: MUSIC_BUF ? MUSIC_BUF.duration : 0,
-    ac: ac ? ac.state : 'none'
-  }),
-  killAll() {
-    for (const p of [...live])
-      if (p.state !== 'dying' && p.state !== 'dead') kill(p, 0, 1, 'shot');
-  },
-  look(px, py, pz, lx, ly, lz, fov = 30) {
-    CAM.mode = 'manual';
-    CAM.fov = fov;
-    CAM.pos.set(px, py, pz);
-    CAM.look.set(lx, ly, lz);
-  },
-  showToast,
-  allyFaceCanvas: () => allyFaceTex.image,
-  badgeCanvas: () => allyBadgeTex.image,
-  meBadgeCanvas: () => MR.torso.children.find((m) => Array.isArray(m.material) && m.material[4]?.map)?.material[4].map.image,
-  carePosterCanvas: () => carePosterTex.image,
-  startIntro,
-  drop,
-  startEnding,
-  restart,
-  house: HOUSE,
-  sg: SG,
-  houseHide,
-  houseAppear,
-  startEnterHouse,
-  setupReturn,
-  resumeFromHouse,
-  sgEquip,
-  sgDiscard,
-  spawn(n, kind = 0) {
-    for (let i = 0; i < n; i++) spawnOne(kind);
-  },
-  near(n, r = 2.5) {
-    for (let i = 0; i < n; i++) {
-      const a = rand(0, TAU);
-      const p = newPerson(ME.x + Math.sin(a) * r, ME.z + Math.cos(a) * r, {
-        state: 'chase',
-        yaw: a + Math.PI
-      });
-      if (p) p.speakCD = rand(0, 1);
-    }
-  },
-};

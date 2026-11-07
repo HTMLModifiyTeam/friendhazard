@@ -5,16 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
     <meta name="theme-color" content="#ffffff">
     <title>친구하자드: 집안</title>
-    <link rel="icon" type="image/x-icon" href="/imgs/icon.svg">
+    <link rel="icon" type="image/x-icon" href="imgs/icon.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@500;700;900&display=swap">
     <link rel="stylesheet" href="styles/house/main.css">
-    <link rel="stylesheet" href="styles/house/mod-menu.css">
+    <link rel="stylesheet" href="styles/mod-menu.css">
     <script type="importmap">{"imports":{"three":"https://threejs.org/build/three.module.js"}}</script>
   </head>
 
   <body>
+    <script type="module" src="js/house.js"></script>
+
     <canvas id="c" aria-label="게임 화면"></canvas>
     <div id="ui">
       <div id="vig"></div>
@@ -134,11 +136,10 @@
           <label class="mod-toggle"><span>Noclip</span><input id="modNoclip" type="checkbox"></label>
         </div>
         <button id="modRepel" class="mod-action" type="button">Push crowd away</button>
+        <button id="killAll" class="mod-action" type="button">Kill All</button>
         <small>백틱 키로 열기 / 닫기</small>
       </section>
       <div id="err" hidden></div>
     </div>
-    <script type="module" src="js/house.js"></script>
   </body>
-
 </html>
