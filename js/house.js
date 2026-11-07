@@ -14,7 +14,10 @@ const Link = new Linker();
 const LINK = (() => { const l = Link.read(); return l && l.dir === 'in' ? l : null; })();
 const LINK_KILLS = LINK ? Math.max(0, LINK.kills | 0) : 0;
 // 다시하기·처음부터: 원래 게임의 시작 화면으로
-function goMainTitle() { Link.clear(); location.replace('./' + location.search); }
+function goMainTitle() {
+  Link.clear();
+  location.replace('./' + location.search);
+}
 
 // ───────────────────────── 렌더러 / 장면 ─────────────────────────
 const canvas = $('c');
@@ -2002,8 +2005,13 @@ function makeDoorLeaf(wd, ht, tex, handleCol, dark) {
   g.add(leaf);
   const hm = envMat({ color: handleCol, kind: 3, dirt: 0 });
   for (const side of [-1, 1]) {
-    const rose = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.02, 14), hm); rose.rotation.x = Math.PI / 2; rose.position.set(wd - 0.09, 1.0, side * 0.032); g.add(rose);
-    const lever = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.022, 0.024), hm); lever.position.set(wd - 0.14, 1.0, side * 0.055); g.add(lever);
+    const rose = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.02, 14), hm);
+    rose.rotation.x = Math.PI / 2;
+    rose.position.set(wd - 0.09, 1.0, side * 0.032);
+    g.add(rose);
+    const lever = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.022, 0.024), hm);
+    lever.position.set(wd - 0.14, 1.0, side * 0.055);
+    g.add(lever);
   }
   return g;
 }
@@ -3281,7 +3289,7 @@ function shootPistol(h) {
   bulletHit(100, 38, 26, 1.1, 'pistol');
   muzzleLight(1.3);
   ejectShell(h ? -1 : 1);
-  if (!GUN_MOD.silencer) noiseAlert(16);
+  noiseAlert(16);
 }
 function shootShotgun() {
   const s = VM.shot;
@@ -3296,7 +3304,7 @@ function shootShotgun() {
     if (r) hits.set(r.p, (hits.get(r.p) || 0) + 1);
   }
   muzzleLight(2.4);
-  if (!GUN_MOD.silencer) noiseAlert(22);
+  noiseAlert(22);
 }
 // 칼: 붙잡혔을 때 보고 있는 쪽에 붙은 사람부터
 function stab() {
@@ -3594,7 +3602,7 @@ function noiseAlert(radius) {
     if (p.state !== 'idle') continue;
     const k = navIdx(p.x, p.z), d = k >= 0 ? NAV.dist[k] : -1;
     const m = d >= 0 ? d * 0.25 : Math.hypot(p.x - PL.x, p.z - PL.z) * 1.6;
-    if (m < radius) notice(p, rand(0.15, 0.5));
+    if (m < radius && !GUN_MOD.silencer) notice(p, rand(0.15, 0.5));
   }
 }
 function tryCling(p) {
@@ -3694,7 +3702,7 @@ function lieTick(p, dt, d, dx, dz) {
     p.losT -= dt;
     if (p.losT <= 0 && p.noticeT < 0) {
       p.losT = 0.2;
-      if ((d < 2.6 || (d < 8.5 && losClear(p.hc.x, p.hc.y + 0.1, p.hc.z, PL.x, PL.eye, PL.z))) && PL.z < 30.6) notice(p, rand(0.5, 1.0));
+      if (((d < 2.6 || (d < 8.5 && losClear(p.hc.x, p.hc.y + 0.1, p.hc.z, PL.x, PL.eye, PL.z))) && PL.z < 30.6) && !GUN_MOD.silencer) notice(p, rand(0.5, 1.0));
     }
     if (p.noticeT >= 0) {
       p.look = approach(p.look, 1, 2.5, dt);
@@ -3751,10 +3759,10 @@ function crowdTick(dt) {
       p.losT -= dt;
       if (p.losT <= 0 && p.noticeT < 0) {
         p.losT = 0.15;
-        if (d < 2.3 && PL.z < 30.6) notice(p, 0.12);
+        if ((d < 2.3 && PL.z < 30.6) && !GUN_MOD.silencer) notice(p, 0.12);
         else if (d < 13 && PL.z < 30.6 && losClear(p.hc.x, p.hc.y, p.hc.z, PL.x, PL.eye, PL.z)) {
           const facing = (Math.sin(p.yaw) * dx + Math.cos(p.yaw) * dz) / d;
-          if (d < 6 || facing > -0.25) notice(p, rand(0.3, 0.75));
+          if ((d < 6 || facing > -0.25) && !GUN_MOD.silencer) notice(p, rand(0.3, 0.75));
         }
       }
       if (p.noticeT >= 0) {
@@ -4107,7 +4115,7 @@ function startEvent() {
   // 근처 방에서 누운 사람들이 스르륵 미끄러져 나온다
   later(3.0, () => { if (G.event && G.state === 'play') burstRoom({ lie: true, min: 2.5, max: 11 }); });
   later(5.2, () => { if (G.event && G.state === 'play') burstRoom({ lie: true, min: 4, max: 14 }); });
-  for (const p of live) if (p.state === 'idle') notice(p, rand(0.6, 2.2));
+  for (const p of live) if (p.state === 'idle' && !GUN_MOD.silencer) notice(p, rand(0.6, 2.2));
 }
 function eventTick(dt) {
   if (!G.event) return;
@@ -4398,50 +4406,120 @@ function showResult() {
 }
 
 // ───────────────────────── 문 열리는 장면 ─────────────────────────
-const DS = { t: 0, dur: 4.7, door: null, lever: null, built: false, skip: false };
+const DS = {
+  t: 0, dur: 4.7, skip: false, built: false,
+  door: null, lever: null, pad: null,
+  openAngle: -Math.PI * 0.55
+};
+
 function buildDoorScene() {
+  if (DS.built) return;
+
+  // ---- dimensions ----
+  const DOOR_W = 1.0, DOOR_H = 2.12;
+  const HALF_W = DOOR_W / 2;
+  const WALL_W = 6, WALL_TOP = 3.5, WALL_BOTTOM = 0;
+  const WALL_H = WALL_TOP - WALL_BOTTOM;
+  const TEX_SIZE = 2;                         // world units per texture tile
+
   doorScene.background = new THREE.Color(0x000000);
-  const amb = new THREE.AmbientLight(0xffffff, 0.035); doorScene.add(amb);
-  const front = new THREE.PointLight(0xcfd8ff, 0.8, 5, 1.8); front.position.set(0.2, 1.3, 3.2); doorScene.add(front);
+
+  const mesh = (geo, mat, x = 0, y = 0, z = 0, parent = doorScene) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z);
+    parent.add(m);
+    return m;
+  };
+
+  // Each piece gets its own texture repeat so the pattern is not stretched.
+  const tiledMat = (baseTex, w, h, x0, y0, params) => {
+    const tex = baseTex.clone();
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(w / TEX_SIZE, h / TEX_SIZE);
+    tex.offset.set(x0 / TEX_SIZE, y0 / TEX_SIZE);   // keeps pattern continuous across pieces
+    tex.needsUpdate = true;
+    return new THREE.MeshStandardMaterial({ ...params, map: tex });
+  };
+
+  const wallPiece = (w, h, cx, cy) => mesh(new THREE.PlaneGeometry(w, h), tiledMat(TEX.homeWall, w, h, cx - w / 2, cy - h / 2, { color: 0x6a6358, roughness: 0.95 }), cx, cy, 0);
+
+  // ---- lights ----
+  doorScene.add(new THREE.AmbientLight(0xffffff, 0.035));
+
+  const front = new THREE.PointLight(0xcfd8ff, 0.8, 5, 1.8);
+  front.position.set(0.2, 1.3, 3.2);
+  doorScene.add(front);
+
   const spot = new THREE.SpotLight(0xdfe8ff, 55, 11, 0.42, 0.8, 1.4);
-  spot.position.set(-0.7, 2.9, 2.9); spot.target.position.set(0.05, 1.05, 0); doorScene.add(spot, spot.target);
-  const fill = new THREE.PointLight(0xffc98a, 0.7, 3.5, 2); fill.position.set(0.9, 0.3, 1.2); doorScene.add(fill);
-  const wallMat = new THREE.MeshStandardMaterial({ color: 0x6a6358, roughness: 0.95, map: TEX.homeWall });
-  const wall = new THREE.Mesh(new THREE.PlaneGeometry(6, 4), wallMat); wall.position.set(0, 1.5, 0); doorScene.add(wall);
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(6, 4), new THREE.MeshStandardMaterial({ color: 0x8f8a82, roughness: 0.8, map: TEX.tile }));
-  floor.rotation.x = -Math.PI / 2; floor.position.set(0, -0.5 + 0.5, 1.6); doorScene.add(floor);
-  // 문 구멍을 뚫기 위해 벽은 네 조각으로
-  wall.visible = false;
-  const W2 = 0.5, H2 = 2.12;
-  for (const [x, w] of [[-W2 - 1.5, 3], [W2 + 1.5, 3]]) { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, 4), wallMat); m.position.set(x, 1.5, 0); doorScene.add(m); }
-  const top = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 4 - H2 + 0.5), wallMat); top.position.set(0, H2 + (4 - H2 - 0.5) / 2 + 0.0, 0); doorScene.add(top);
-  // 문틀
+  spot.position.set(-0.7, 2.9, 2.9);
+  spot.target.position.set(0.05, 1.05, 0);
+  doorScene.add(spot, spot.target);
+
+  const fill = new THREE.PointLight(0xffc98a, 0.7, 3.5, 2);
+  fill.position.set(0.9, 0.3, 1.2);
+  doorScene.add(fill);
+
+  // ---- floor ----
+  const floorMat = tiledMat(TEX.tile, 6, 4, 0, 0, { color: 0x8f8a82, roughness: 0.8 });
+  const floor = mesh(new THREE.PlaneGeometry(6, 4), floorMat, 0, 0, 1.6);
+  floor.rotation.x = -Math.PI / 2;
+
+  // ---- wall: left / right / lintel, leaving a door opening ----
+  const sideW = (WALL_W - DOOR_W) / 2;
+  wallPiece(sideW, WALL_H, -(HALF_W + sideW / 2), WALL_BOTTOM + WALL_H / 2);
+  wallPiece(sideW, WALL_H,  (HALF_W + sideW / 2), WALL_BOTTOM + WALL_H / 2);
+  const lintelH = WALL_TOP - DOOR_H;                       // fixed: was 4 - H2 + 0.5
+  wallPiece(DOOR_W, lintelH, 0, DOOR_H + lintelH / 2);
+
+  // ---- door frame ----
   const frameMat = new THREE.MeshStandardMaterial({ color: 0x3b3d42, roughness: 0.5, metalness: 0.5 });
-  for (const [x, y, w, h] of [[-W2 - 0.04, H2 / 2, 0.08, H2 + 0.08], [W2 + 0.04, H2 / 2, 0.08, H2 + 0.08], [0, H2 + 0.04, 1.08, 0.08]]) {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.12), frameMat); m.position.set(x, y, 0.0); doorScene.add(m);
-  }
-  // 문짝: 오른쪽 경첩, 안쪽(멀어지는 쪽)으로 열림
-  const pivot = new THREE.Group(); pivot.position.set(W2, 0, -0.03); doorScene.add(pivot);
-  const leafMat = new THREE.MeshStandardMaterial({ color: 0xffffff, map: TEX.doorDark, roughness: 0.42, metalness: 0.35 });
-  const leaf = new THREE.Mesh(new THREE.BoxGeometry(1.0, H2, 0.05), leafMat); leaf.position.set(-0.5, H2 / 2, 0); pivot.add(leaf);
+  const FT = 0.08;
+  [
+    [-HALF_W - FT / 2, DOOR_H / 2, FT, DOOR_H + FT],
+    [ HALF_W + FT / 2, DOOR_H / 2, FT, DOOR_H + FT],
+    [0, DOOR_H + FT / 2, DOOR_W + FT * 2, FT],
+  ].forEach(([x, y, w, h]) => mesh(new THREE.BoxGeometry(w, h, 0.12), frameMat, x, y, 0));
+
+  // ---- door leaf (hinge on the right) ----
+  const pivot = new THREE.Group();
+  pivot.position.set(HALF_W, 0, -0.03);
+  doorScene.add(pivot);
+
+  mesh(new THREE.BoxGeometry(DOOR_W, DOOR_H, 0.05), new THREE.MeshStandardMaterial({ color: 0xffffff, map: TEX.doorDark, roughness: 0.42, metalness: 0.35 }), -HALF_W, DOOR_H / 2, 0, pivot);
   const steel = new THREE.MeshStandardMaterial({ color: 0xc9ccd2, roughness: 0.25, metalness: 0.9 });
-  const lever = new THREE.Group(); lever.position.set(-0.88, 1.0, 0.045); pivot.add(lever);
-  const rose = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.02, 16), steel); rose.rotation.x = Math.PI / 2; lever.add(rose);
-  const bar = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.024, 0.026), steel); bar.position.set(0.075, 0, 0.02); lever.add(bar);
-  // 도어락 번호판
-  const lockBody = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.27, 0.035), new THREE.MeshStandardMaterial({ color: 0x15161a, roughness: 0.15, metalness: 0.6 }));
-  lockBody.position.set(-0.89, 1.25, 0.04); pivot.add(lockBody);
+
+  // lever handle
+  const lever = new THREE.Group();
+  lever.position.set(-0.88, 1.0, 0.045);
+  pivot.add(lever);
+  const rose = mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.02, 16), steel, 0, 0, 0, lever);
+  rose.rotation.x = Math.PI / 2;
+  mesh(new THREE.BoxGeometry(0.15, 0.024, 0.026), steel, 0.075, 0, 0.02, lever);
+
+  // digital lock keypad
+  mesh(new THREE.BoxGeometry(0.085, 0.27, 0.035), new THREE.MeshStandardMaterial({ color: 0x15161a, roughness: 0.15, metalness: 0.6 }), -0.89, 1.25, 0.04, pivot);
+
   const keyC = cnv(64, 192), kg = keyC.getContext('2d');
-  kg.fillStyle = '#0c0d10'; kg.fillRect(0, 0, 64, 192);
-  kg.fillStyle = '#58c8ff'; kg.font = '700 22px sans-serif'; kg.textAlign = 'center'; kg.textBaseline = 'middle';
-  ['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'].forEach((s, i) => kg.fillText(s, 16 + (i % 3) * 16, 40 + Math.floor(i / 3) * 34));
-  const keyTex = texOf(keyC);
-  const pad = new THREE.Mesh(new THREE.PlaneGeometry(0.06, 0.18), new THREE.MeshBasicMaterial({ map: keyTex, transparent: true }));
-  pad.position.set(-0.89, 1.25, 0.059); pivot.add(pad);
-  DS.pad = pad;
-  const peep = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.02, 12), steel); peep.rotation.x = Math.PI / 2; peep.position.set(-0.5, 1.58, 0.035); pivot.add(peep);
-  DS.door = pivot; DS.lever = lever; DS.built = true;
+  kg.fillStyle = '#0c0d10';
+  kg.fillRect(0, 0, 64, 192);
+  kg.fillStyle = '#58c8ff';
+  kg.font = '700 22px sans-serif';
+  kg.textAlign = 'center';
+  kg.textBaseline = 'middle';
+  '123456789*0#'.split('').forEach((s, i) => kg.fillText(s, 16 + (i % 3) * 16, 40 + Math.floor(i / 3) * 34));
+
+  const padMat = new THREE.MeshBasicMaterial({ map: texOf(keyC), transparent: true, toneMapped: false });
+  DS.pad = mesh(new THREE.PlaneGeometry(0.06, 0.18), padMat, -0.89, 1.25, 0.059, pivot);
+
+  // peephole
+  const peep = mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.02, 12), steel, -HALF_W, 1.58, 0.035, pivot);
+  peep.rotation.x = Math.PI / 2;
+
+  DS.door = pivot;
+  DS.lever = lever;
+  DS.built = true;
 }
+
 function doorStart(fromGate) {
   if (!DS.built) buildDoorScene();
   // 문 앞에서 눌러 연 경우: 이미 문이 보이고 있으니 어둡게 시작하지 않고, 누르자마자 번호를 누르는 소리
