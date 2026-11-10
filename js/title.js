@@ -1,11 +1,14 @@
 // Game runtime extracted from the original page.
 import * as THREE from 'three';
 import VOICE_DATA from './data/voices.js';
-import { CROWD_COLORS, introText } from './data/data.js';
-import Linker from './utils/Linker.js';
-import Store from './utils/Store.js';
+import { CROWD_COLORS, introText, ITEM_DEFS, WAVES, SLOTS, ALLY_DEFS, ALLY_LOOK } from './data/data.js';
+import { RIFF, ROOTS, BASS_PAT, ARP } from './data/music.js';
 import { $, rand, pick, TAU, approach, wrapAngle, angleApproach, seeded } from './utils.js';
 import { easeOutCubic, easeInOutCubic, easeInQuad, easeInOutSine } from './eases.js'
+import Linker from './utils/Linker.js';
+import Store from './utils/Store.js';
+import AudioEngine from './audio/AudioEngine.js';
+import Sfx from './audio/sfx.js';
 
 // ───────────────────────── 기본 도구 ─────────────────────────
 const store = new Store("friendhazard");
@@ -98,1013 +101,49 @@ window.addEventListener('resize', onResize);
 onResize();
 
 // ───────────────────────── 소리 ─────────────────────────
-let ac = null;
-const A = {};
 let MUTED = !!store.get('muted', false);
-const VO = {}; // 이름 → AudioBuffer
-const activeVoices = new Set();
 
-function audioInit() {
-  if (ac) {
-    if (ac.state === 'suspended') ac.resume();
-    return;
-  }
-  const AC = window.AudioContext || window.webkitAudioContext;
-  if (!AC) return;
-  ac = new AC({
-    latencyHint: 'interactive'
-  });
-  A.master = ac.createGain();
-  A.master.gain.value = MUTED ? 0 : 0.92;
-  A.comp = ac.createDynamicsCompressor();
-  A.comp.threshold.value = -13;
-  A.comp.knee.value = 8;
-  A.comp.ratio.value = 4.5;
-  A.comp.attack.value = 0.002;
-  A.comp.release.value = 0.16;
-  A.comp.connect(A.master);
-  A.master.connect(ac.destination);
-  A.sfx = ac.createGain();
-  A.sfx.gain.value = 0.95;
-  A.sfx.connect(A.comp);
-  A.voice = ac.createGain();
-  A.voice.gain.value = 1.05;
-  A.voice.connect(A.comp);
-  A.music = ac.createGain();
-  A.music.gain.value = 0.4;
-  A.music.connect(A.comp);
-  A.ir = makeIR(2.3, 2.6);
-  A.verb = ac.createConvolver();
-  A.verb.buffer = A.ir;
-  A.verbOut = ac.createGain();
-  A.verbOut.gain.value = 0.42;
-  A.verb.connect(A.verbOut);
-  A.verbOut.connect(A.comp);
-  A.tap = ac.createAnalyser();
-  A.tap.fftSize = 256;
-  A.master.connect(A.tap);
-  A.tapBuf = new Float32Array(256);
-  A.noise = makeNoise(2.5);
-  A.shaper = makeCurve(2.4);
-  decodeVoices();
-  if (ac.state === 'suspended') ac.resume();
-  setTimeout(renderMusicBuffer, 400);
-}
-// 소리가 끊겼을 때 되살리기: 멈춘 컨텍스트 재개, 출력이 망가졌으면(NaN) 버스를 새로 짬
-function audioRebuild() {
-  for (const n of [A.comp, A.master, A.verb, A.verbOut, A.tap, A.sfx, A.voice, A.music]) {
-    try {
-      n.disconnect();
-    } catch { }
-  }
-  A.master = ac.createGain();
-  A.master.gain.value = MUTED ? 0 : 0.92;
-  A.comp = ac.createDynamicsCompressor();
-  A.comp.threshold.value = -13;
-  A.comp.knee.value = 8;
-  A.comp.ratio.value = 4.5;
-  A.comp.attack.value = 0.002;
-  A.comp.release.value = 0.16;
-  A.comp.connect(A.master);
-  A.master.connect(ac.destination);
-  A.tap = ac.createAnalyser();
-  A.tap.fftSize = 256;
-  A.master.connect(A.tap);
-  A.sfx.connect(A.comp);
-  A.voice.connect(A.comp);
-  A.music.connect(A.comp);
-  A.verb = ac.createConvolver();
-  A.verb.buffer = A.ir;
-  A.verbOut = gainN(0.42);
-  A.verb.connect(A.verbOut);
-  A.verbOut.connect(A.comp);
-  if (MU.on) musicStart(ac.currentTime + 0.05, musicNowStep());
-}
-let audioWatchT = 0,
-  audioBad = 0;
-
-function audioWatch(dt) {
-  if (!ac) return;
-  audioWatchT -= dt;
-  if (audioWatchT > 0) return;
-  audioWatchT = 1.2;
-  if (document.hidden) return;
-  if (ac.state !== 'running' && ac.state !== 'closed') {
-    try {
-      const p = ac.resume();
-      if (p && p.catch) p.catch(() => { });
-    } catch { }
-    return;
-  }
-  if (!A.tap) return;
-  A.tap.getFloatTimeDomainData(A.tapBuf);
-  let bad = false;
-  for (let i = 0; i < A.tapBuf.length; i++) {
-    if (!Number.isFinite(A.tapBuf[i])) {
-      bad = true;
-      break;
-    }
-  }
-  if (bad) {
-    audioBad++;
-    audioRebuild();
-  }
-}
-
-function audioPoke() {
-  if (!ac || ac.state === 'running' || ac.state === 'closed') return;
-  try {
-    const p = ac.resume();
-    if (p && p.catch) p.catch(() => { });
-  } catch { }
-}
+const audio = new AudioEngine({
+  muted: MUTED,
+  voiceData: () => VOICE_DATA,
+  onReady: () => renderMusicBuffer(),
+  onRebuild: (a) => {
+    if (MU.on) musicStart(a.time + 0.05, musicNowStep());
+  },
+});
+audio.autoUnlock();
+const sfx = new Sfx({ audio, engine: AudioEngine, rand, isMuted: () => MUTED });
 
 function setMuted(m) {
   MUTED = m;
   store.set('muted', m);
   $('mute').classList.toggle('muted', m);
   $('mute').setAttribute('aria-label', m ? '소리 켜기' : '소리 끄기');
-  if (ac) {
-    const t = ac.currentTime;
-    A.master.gain.cancelScheduledValues(t);
-    A.master.gain.setTargetAtTime(m ? 0 : 0.92, t, 0.03);
-  }
+  audio.setMuted(m);
 }
 
-function makeNoise(sec) {
-  const n = Math.floor(ac.sampleRate * sec),
-    b = ac.createBuffer(1, n, ac.sampleRate),
-    d = b.getChannelData(0);
-  for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
-  return b;
-}
-
-function makeIR(sec, decay) {
-  const n = Math.floor(ac.sampleRate * sec),
-    b = ac.createBuffer(2, n, ac.sampleRate);
-  for (let c = 0; c < 2; c++) {
-    const d = b.getChannelData(c);
-    for (let i = 0; i < n; i++) {
-      const t = i / n;
-      d[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, decay) * (i < 90 ? i / 90 : 1);
-    }
-  }
-  return b;
-}
-
-function makeCurve(k) {
-  const n = 1024, c = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    const x = i / (n - 1) * 2 - 1;
-    c[i] = Math.tanh(x * k) / Math.tanh(k);
-  }
-  return c;
-}
-
-async function decodeVoices() {
-  let data = VOICE_DATA || {};
-  await Promise.all(Object.keys(data).map(async (k) => {
-    try {
-      const res = await fetch("voices/" + data[k].b);
-      if (!res.ok) throw new Error(res.status);
-      const ab = await res.arrayBuffer();
-      VO[k] = await ac.decodeAudioData(ab);
-    } catch (e) { console.warn('Failed to load voice:', k, data[k].b, e); }
-  }));
-}
-
-// ── 작은 헬퍼 ──
-function gainN(v) {
-  const g = ac.createGain();
-  g.gain.value = v;
-  return g;
-}
-
-function filt(type, f, q) {
-  const b = ac.createBiquadFilter();
-  b.type = type;
-  b.frequency.value = f;
-  if (q !== undefined) b.Q.value = q;
-  return b;
-}
-
-function oscN(type, f) {
-  const o = ac.createOscillator();
-  o.type = type;
-  o.frequency.value = f;
-  return o;
-}
-
-function noiseN(rate) {
-  const s = ac.createBufferSource();
-  s.buffer = A.noise;
-  s.loop = true;
-  if (rate) s.playbackRate.value = rate;
-  return s;
-}
-
-function envAD(param, t, a, peak, d) {
-  param.cancelScheduledValues(t);
-  param.setValueAtTime(0.0001, t);
-  param.exponentialRampToValueAtTime(Math.max(0.0002, peak), t + a);
-  param.exponentialRampToValueAtTime(0.0001, t + a + d);
-}
-
-function outChain(vol, pan, verb) {
-  const g = gainN(vol);
-  let tail = g;
-  if (pan && Math.abs(pan) > 0.06 && ac.createStereoPanner) {
-    const p = ac.createStereoPanner();
-    p.pan.value = THREE.MathUtils.clamp(pan, -1, 1);
-    g.connect(p);
-    tail = p;
-  }
-  tail.connect(A.sfx);
-  if (verb && verb > 0.2) {
-    const s = gainN(verb);
-    g.connect(s);
-    s.connect(A.verb);
-  }
-  return g;
-}
-const ok = () => ac && (ac.state === 'running');
-// ── 효과음 수 제한 ──
-// 후반에 한꺼번에 수백 개씩 만들면 휴대폰 소리 엔진이 버티지 못한다.
-// 중요도: 3 연출(도장, 하이파이브, 알림…) / 2 내 총·칼 / 1 쓰러뜨리는 소리 / 0 잔소리(탄피, 털썩, 철퍽, 휘두름)
-const SFX_MAX = 20;
-const sfxEnds = [];
-let sfxWinT = -1,
-  sfxWinN = 0;
-
-function sfxGate(prio, dur) {
-  if (!ok()) return false;
-  const now = ac.currentTime;
-  for (let i = sfxEnds.length - 1; i >= 0; i--)
-    if (sfxEnds[i] <= now) sfxEnds.splice(i, 1);
-  if (now - sfxWinT > 0.06) {
-    sfxWinT = now;
-    sfxWinN = 0;
-  }
-  if (prio < 3) {
-    const cap = prio === 2 ? SFX_MAX + 4 : prio === 1 ? SFX_MAX : SFX_MAX - 8;
-    const win = prio === 2 ? 6 : prio === 1 ? 4 : 2;
-    if (sfxEnds.length >= cap || sfxWinN >= win) return false;
-  }
-  sfxEnds.push(now + dur);
-  sfxWinN++;
-  return true;
-}
-
-// ── 효과음 ──
-function sfxGun(pan = 0) {
-  if (!sfxGate(2, 0.3)) return;
-  const t = ac.currentTime + 0.002,
-    r = rand(0.92, 1.08);
-  const out = outChain(0.95, pan * 0.6, 0.55);
-  const sh = ac.createWaveShaper();
-  sh.curve = A.shaper;
-  sh.connect(out);
-  // 1. 찢어지는 크랙
-  const n1 = noiseN(rand(0.9, 1.15));
-  const hp = filt('highpass', 2400, 0.7);
-  const g1 = gainN(0);
-  envAD(g1.gain, t, 0.0008, 1.0, 0.045);
-  n1.connect(hp).connect(g1).connect(sh);
-  n1.start(t, rand(0, 2));
-  n1.stop(t + 0.07);
-  // 2. 몸통 (저역 스윕)
-  const n2 = noiseN();
-  const lp = filt('lowpass', 6500, 0.8);
-  lp.frequency.setValueAtTime(7000 * r, t);
-  lp.frequency.exponentialRampToValueAtTime(260, t + 0.22);
-  const g2 = gainN(0);
-  envAD(g2.gain, t, 0.0015, 0.95, 0.24);
-  n2.connect(lp).connect(g2).connect(sh);
-  n2.start(t, rand(0, 2));
-  n2.stop(t + 0.3);
-  // 3. 쿵 (펀치)
-  const o = oscN('sine', 160 * r);
-  o.frequency.setValueAtTime(165 * r, t);
-  o.frequency.exponentialRampToValueAtTime(44, t + 0.1);
-  const g3 = gainN(0);
-  envAD(g3.gain, t, 0.002, 1.15, 0.17);
-  o.connect(g3).connect(sh);
-  o.start(t);
-  o.stop(t + 0.22);
-}
-let tinkBudget = 0;
-
-function sfxTink(v = 1, pan = 0) {
-  if (tinkBudget > 3 || !sfxGate(0, 0.17)) return;
-  tinkBudget++;
-  const t = ac.currentTime, r = rand(0.88, 1.12);
-  const out = outChain(0.17 * v, pan * 0.5, 0);
-  for (const [f, d, a] of [
-    [3150, 0.16, 1],
-    [6820, 0.07, 0.5]
-  ]) {
-    const o = oscN('sine', f * r);
-    const g = gainN(0);
-    envAD(g.gain, t, 0.0008, a, d * rand(0.8, 1.2));
-    o.connect(g).connect(out);
-    o.start(t);
-    o.stop(t + d + 0.05);
-  }
-}
-// 아이템 획득 '띠리링': 탄피 예산과 전투 효과음 제한에 묻히지 않는 짧은 상승음.
-function sfxItemPickup() {
-  if (!ok() || MUTED) return;
-  const t = ac.currentTime + 0.002, out = outChain(0.48, 0, 0), nodes = [];
-  [[1318.51, 0, 0.07], [1760, 0.075, 0.07], [2637.02, 0.15, 0.16]].forEach(([f, d, decay], i) => {
-    const tt = t + d;
-    const o = oscN('triangle', f),
-      g = gainN(0);
-    const overtone = oscN('sine', f * 2),
-      overtoneGain = gainN(0);
-    envAD(g.gain, tt, 0.002, 0.68, decay);
-    envAD(overtoneGain.gain, tt, 0.001, 0.14, decay * 0.65);
-    o.connect(g).connect(out);
-    overtone.connect(overtoneGain).connect(out);
-    nodes.push(o, g, overtone, overtoneGain);
-    o.start(tt);
-    overtone.start(tt);
-    o.stop(tt + decay + 0.025);
-    overtone.stop(tt + decay + 0.025);
-    if (i === 2) o.onended = () => {
-      for (const n of nodes) n.disconnect();
-      out.disconnect();
-    };
-  });
-}
-
-function sfxFlesh(v = 1, pan = 0) {
-  if (!sfxGate(1, 0.14)) return;
-  const t = ac.currentTime + 0.004;
-  const out = outChain(0.85 * v, pan * 0.5, 0.18);
-  const n = noiseN(rand(0.7, 0.9));
-  const lp = filt('lowpass', 1100, 1.4);
-  const g = gainN(0);
-  envAD(g.gain, t, 0.002, 0.9, 0.07);
-  n.connect(lp).connect(g).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.12);
-  const o = oscN('sine', 95);
-  o.frequency.exponentialRampToValueAtTime(52, t + 0.09);
-  const g2 = gainN(0);
-  envAD(g2.gain, t, 0.002, 0.9, 0.1);
-  o.connect(g2).connect(out);
-  o.start(t);
-  o.stop(t + 0.14);
-  // 물기 있는 철퍽
-  const n2 = noiseN(rand(1, 1.3));
-  const bp = filt('bandpass', 1500, 1.6);
-  const g3 = gainN(0);
-  envAD(g3.gain, t + 0.012, 0.002, 0.55, 0.06);
-  n2.connect(bp).connect(g3).connect(out);
-  n2.start(t + 0.01, rand(0, 2));
-  n2.stop(t + 0.1);
-}
-
-function sfxSplat(v = 1, pan = 0) {
-  if (!sfxGate(0, 0.1)) return;
-  const t = ac.currentTime;
-  const out = outChain(0.45 * v, pan * 0.5, 0);
-  for (let i = 0; i < 2; i++) {
-    const tt = t + i * rand(0.012, 0.03);
-    const n = noiseN(rand(0.8, 1.4));
-    const bp = filt('bandpass', rand(700, 1400), 2.2);
-    const g = gainN(0);
-    envAD(g.gain, tt, 0.001, rand(0.4, 0.8), rand(0.03, 0.06));
-    n.connect(bp).connect(g).connect(out);
-    n.start(tt, rand(0, 2));
-    n.stop(tt + 0.1);
-  }
-}
-
-function sfxFall(v = 1, pan = 0) {
-  if (!sfxGate(0, 0.22)) return;
-  const t = ac.currentTime;
-  const out = outChain(0.75 * v, pan * 0.5, 0);
-  for (const [dt, a] of [[0, 1]]) {
-    const o = oscN('sine', 78);
-    o.frequency.setValueAtTime(80, t + dt);
-    o.frequency.exponentialRampToValueAtTime(36, t + dt + 0.16);
-    const g = gainN(0);
-    envAD(g.gain, t + dt, 0.003, a, 0.18);
-    o.connect(g).connect(out);
-    o.start(t + dt);
-    o.stop(t + dt + 0.25);
-    const n = noiseN(0.6);
-    const lp = filt('lowpass', 420, 0.8);
-    const g2 = gainN(0);
-    envAD(g2.gain, t + dt, 0.002, a * 0.7, 0.11);
-    n.connect(lp).connect(g2).connect(out);
-    n.start(t + dt, rand(0, 2));
-    n.stop(t + dt + 0.16);
-  }
-}
-
-function sfxStab(pan = 0, v = 1) {
-  if (!sfxGate(v >= 1 ? 2 : 1, 0.2)) return;
-  const t = ac.currentTime;
-  const out = outChain(0.9 * v, pan * 0.4, 0.2);
-  // 휙
-  const n = noiseN();
-  const bp = filt('bandpass', 900, 2.4);
-  bp.frequency.setValueAtTime(900, t);
-  bp.frequency.exponentialRampToValueAtTime(4200, t + 0.07);
-  const g = gainN(0);
-  envAD(g.gain, t, 0.01, 0.5, 0.06);
-  n.connect(bp).connect(g).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.1);
-  // 푹 (젖은 공명)
-  const t2 = t + 0.055;
-  const n2 = noiseN(0.8);
-  const lp = filt('lowpass', 2000, 9);
-  lp.frequency.setValueAtTime(2200, t2);
-  lp.frequency.exponentialRampToValueAtTime(320, t2 + 0.13);
-  const g2 = gainN(0);
-  envAD(g2.gain, t2, 0.002, 1.0, 0.14);
-  n2.connect(lp).connect(g2).connect(out);
-  n2.start(t2, rand(0, 2));
-  n2.stop(t2 + 0.2);
-  const o = oscN('sine', 120);
-  o.frequency.setValueAtTime(130, t2);
-  o.frequency.exponentialRampToValueAtTime(55, t2 + 0.1);
-  const g3 = gainN(0);
-  envAD(g3.gain, t2, 0.002, 0.95, 0.12);
-  o.connect(g3).connect(out);
-  o.start(t2);
-  o.stop(t2 + 0.16);
-  // 칼끝 쇳소리
-  const o2 = oscN('triangle', 5200);
-  const g4 = gainN(0);
-  envAD(g4.gain, t2 - 0.01, 0.001, 0.05, 0.05);
-  o2.connect(g4).connect(out);
-  o2.start(t2 - 0.01);
-  o2.stop(t2 + 0.06);
-}
-// 붙잡히는 소리: 몸이 부딪히는 '쿵' + 옷을 움켜쥐는 '부스럭' + 짧은 '헉'. 저음만으로는 휴대폰 스피커에서 안 들려서 중역을 같이 넣는다.
-function sfxGrab(pan = 0, v = 1) {
-  if (!sfxGate(v >= 1 ? 2 : 0, 0.18)) return;
-  const t = ac.currentTime;
-  const out = outChain(1.0 * v, pan * 0.5, 0.12);
-  const n = noiseN(0.5);
-  const lp = filt('lowpass', 700, 1);
-  const g = gainN(0);
-  envAD(g.gain, t, 0.008, 0.8, 0.11);
-  n.connect(lp).connect(g).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.16);
-  const o = oscN('sine', 140);
-  o.frequency.exponentialRampToValueAtTime(85, t + 0.08);
-  const g2 = gainN(0);
-  envAD(g2.gain, t, 0.004, 0.7, 0.09);
-  o.connect(g2).connect(out);
-  o.start(t);
-  o.stop(t + 0.12);
-  const n2 = noiseN(rand(1.0, 1.3));
-  const bp = filt('bandpass', 1300, 1.2);
-  bp.frequency.setValueAtTime(1700, t);
-  bp.frequency.exponentialRampToValueAtTime(650, t + 0.1);
-  const g3 = gainN(0);
-  envAD(g3.gain, t + 0.004, 0.003, 0.8, 0.09);
-  n2.connect(bp).connect(g3).connect(out);
-  n2.start(t, rand(0, 2));
-  n2.stop(t + 0.15);
-  const o2 = oscN('triangle', 330);
-  o2.frequency.setValueAtTime(360, t + 0.01);
-  o2.frequency.exponentialRampToValueAtTime(180, t + 0.1);
-  const g4 = gainN(0);
-  envAD(g4.gain, t + 0.01, 0.006, 0.38, 0.1);
-  o2.connect(g4).connect(out);
-  o2.start(t + 0.01);
-  o2.stop(t + 0.16);
-}
-// 방망이 휘두르는 바람 소리
-function sfxSwing(pan = 0, v = 1) {
-  if (!sfxGate(0, 0.25)) return;
-  const t = ac.currentTime;
-  const out = outChain(0.42 * v, pan * 0.5, 0);
-  const n = noiseN(rand(0.9, 1.1));
-  const bp = filt('bandpass', 450, 1.6);
-  bp.frequency.setValueAtTime(420, t);
-  bp.frequency.exponentialRampToValueAtTime(2300, t + 0.13);
-  bp.frequency.exponentialRampToValueAtTime(900, t + 0.22);
-  const g = gainN(0);
-  g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(0.9, t + 0.1);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.24);
-  n.connect(bp).connect(g).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.26);
-}
-// 방망이에 맞는 소리: 나무 '딱' + 몸 '퍽'
-function sfxBat(pan = 0, v = 1) {
-  if (!sfxGate(1, 0.18)) return;
-  const t = ac.currentTime + 0.002;
-  const out = outChain(0.95 * v, pan * 0.5, 0.3);
-  const o = oscN('triangle', 980 * rand(0.93, 1.07));
-  const g = gainN(0);
-  envAD(g.gain, t, 0.0008, 0.55, 0.06);
-  const o2 = oscN('sine', 1620 * rand(0.95, 1.05));
-  const g2 = gainN(0);
-  envAD(g2.gain, t, 0.0008, 0.3, 0.035);
-  o.connect(g).connect(out);
-  o2.connect(g2).connect(out);
-  o.start(t);
-  o.stop(t + 0.09);
-  o2.start(t);
-  o2.stop(t + 0.06);
-  const n = noiseN(1.2);
-  const bp = filt('bandpass', 2600, 2.5);
-  const g3 = gainN(0);
-  envAD(g3.gain, t, 0.0006, 0.8, 0.025);
-  n.connect(bp).connect(g3).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.04);
-  const b = oscN('sine', 130);
-  b.frequency.setValueAtTime(140, t);
-  b.frequency.exponentialRampToValueAtTime(48, t + 0.14);
-  const g4 = gainN(0);
-  envAD(g4.gain, t, 0.002, 1.0, 0.16);
-  b.connect(g4).connect(out);
-  b.start(t);
-  b.stop(t + 0.2);
-  const n2 = noiseN(0.6);
-  const lp = filt('lowpass', 900, 1);
-  const g5 = gainN(0);
-  envAD(g5.gain, t + 0.004, 0.002, 0.7, 0.08);
-  n2.connect(lp).connect(g5).connect(out);
-  n2.start(t, rand(0, 2));
-  n2.stop(t + 0.12);
-}
-// 하이파이브 '짝!'
-function sfxClap() {
-  if (!sfxGate(3, 0.15)) return;
-  const t = ac.currentTime + 0.002;
-  const out = outChain(1.05, 0, 0.42);
-  const n = noiseN(rand(0.95, 1.05));
-  const bp = filt('bandpass', 1750, 1.1);
-  const g = gainN(0);
-  g.gain.setValueAtTime(0.0001, t);
-  [0, 0.006, 0.013].forEach((d, i) => {
-    g.gain.setValueAtTime(i ? 0.75 : 1.1, t + d);
-    g.gain.exponentialRampToValueAtTime(0.12, t + d + 0.005);
-  });
-  g.gain.setValueAtTime(0.95, t + 0.019);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.13);
-  n.connect(bp).connect(g).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.15);
-  const n2 = noiseN(1.3);
-  const hp = filt('highpass', 4200, 0.7);
-  const g2 = gainN(0);
-  envAD(g2.gain, t, 0.0006, 0.5, 0.05);
-  n2.connect(hp).connect(g2).connect(out);
-  n2.start(t, rand(0, 2));
-  n2.stop(t + 0.07);
-  const o = oscN('sine', 320);
-  o.frequency.setValueAtTime(330, t);
-  o.frequency.exponentialRampToValueAtTime(140, t + 0.06);
-  const g3 = gainN(0);
-  envAD(g3.gain, t, 0.001, 0.55, 0.06);
-  o.connect(g3).connect(out);
-  o.start(t);
-  o.stop(t + 0.09);
-}
-// SNS 알림음
-function sfxChime() {
-  if (!sfxGate(3, 0.5)) return;
-  const t = ac.currentTime + 0.01;
-  const out = outChain(0.36, 0, 0.22);
-  [
-    [1567.98, 0],
-    [2093.0, 0.085]
-  ].forEach(([f, d]) => {
-    const o = oscN('sine', f),
-      o2 = oscN('triangle', f * 2);
-    const g = gainN(0);
-    envAD(g.gain, t + d, 0.003, 0.8, 0.42);
-    const g2 = gainN(0);
-    envAD(g2.gain, t + d, 0.002, 0.12, 0.12);
-    o.connect(g).connect(out);
-    o2.connect(g2).connect(out);
-    o.start(t + d);
-    o.stop(t + d + 0.5);
-    o2.start(t + d);
-    o2.stop(t + d + 0.16);
-  });
-}
-
-function sfxStamp() {
-  if (!sfxGate(3, 0.35)) return;
-  const t = ac.currentTime;
-  const out = outChain(1.0, 0, 0.45);
-  const o = oscN('sine', 95);
-  o.frequency.setValueAtTime(110, t);
-  o.frequency.exponentialRampToValueAtTime(34, t + 0.28);
-  const g = gainN(0);
-  envAD(g.gain, t, 0.002, 1.2, 0.3);
-  o.connect(g).connect(out);
-  o.start(t);
-  o.stop(t + 0.35);
-  const n = noiseN(0.7);
-  const lp = filt('lowpass', 1400, 0.8);
-  const g2 = gainN(0);
-  envAD(g2.gain, t, 0.001, 0.9, 0.09);
-  n.connect(lp).connect(g2).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.14);
-  const n2 = noiseN(1.2);
-  const hp = filt('highpass', 2500, 0.7);
-  const g3 = gainN(0);
-  envAD(g3.gain, t, 0.0008, 0.5, 0.035);
-  n2.connect(hp).connect(g3).connect(out);
-  n2.start(t, rand(0, 2));
-  n2.stop(t + 0.06);
-}
-
-function sfxSparkle(v = 1) {
-  if (!sfxGate(3, 0.7)) return;
-  const t = ac.currentTime;
-  const out = outChain(0.32 * v, 0, 0.6);
-  [1567.98, 2093, 2637, 3136, 4186].forEach((f, i) => {
-    const tt = t + i * 0.045;
-    const o = oscN(i % 2 ? 'sine' : 'triangle', f);
-    const g = gainN(0);
-    envAD(g.gain, tt, 0.002, i === 4 ? 0.7 : 0.5, 0.55);
-    const vib = oscN('sine', 7);
-    const vg = gainN(f * 0.004);
-    vib.connect(vg).connect(o.frequency);
-    vib.start(tt);
-    vib.stop(tt + 0.7);
-    o.connect(g).connect(out);
-    o.start(tt);
-    o.stop(tt + 0.7);
-  });
-  const n = noiseN(1.4);
-  const bp = filt('highpass', 7000, 0.7);
-  const g = gainN(0);
-  envAD(g.gain, t + 0.1, 0.05, 0.12, 0.35);
-  n.connect(bp).connect(g).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.6);
-}
-
-function sfxType() {
-  if (!sfxGate(3, 0.04)) return;
-  const t = ac.currentTime;
-  const out = outChain(0.16, rand(-0.2, 0.2), 0);
-  const n = noiseN(rand(0.9, 1.3));
-  const bp = filt('bandpass', rand(2600, 4200), 2);
-  const g = gainN(0);
-  envAD(g.gain, t, 0.001, 1, 0.022);
-  n.connect(bp).connect(g).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.04);
-}
-
-function sfxHeart(v = 1) {
-  if (!sfxGate(3, 0.4)) return;
-  const t = ac.currentTime + 0.005;
-  const out = outChain(0.9 * v, 0, 0);
-  for (const [d, a] of [
-    [0, 1],
-    [0.16, 0.7]
-  ]) {
-    const o = oscN('sine', 62);
-    o.frequency.setValueAtTime(70, t + d);
-    o.frequency.exponentialRampToValueAtTime(42, t + d + 0.12);
-    const g = gainN(0);
-    envAD(g.gain, t + d, 0.006, a, 0.14);
-    o.connect(g).connect(out);
-    o.start(t + d);
-    o.stop(t + d + 0.18);
-  }
-}
-
-function sfxImpact(t) {
-  if (!ok()) return;
-  t = t || ac.currentTime;
-  const out = outChain(1.0, 0, 0.8);
-  const o = oscN('sine', 60);
-  o.frequency.setValueAtTime(78, t);
-  o.frequency.exponentialRampToValueAtTime(34, t + 1.2);
-  const g = gainN(0);
-  envAD(g.gain, t, 0.004, 1.3, 1.6);
-  o.connect(g).connect(out);
-  o.start(t);
-  o.stop(t + 1.8);
-  const n = noiseN(0.5);
-  const lp = filt('lowpass', 500, 0.7);
-  lp.frequency.setValueAtTime(1600, t);
-  lp.frequency.exponentialRampToValueAtTime(120, t + 1.0);
-  const g2 = gainN(0);
-  envAD(g2.gain, t, 0.003, 1.0, 1.0);
-  n.connect(lp).connect(g2).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 1.2);
-  // 징 (비조화 배음)
-  const base = 98;
-  [
-    [1, 3.6, 0.5],
-    [1.483, 3.0, 0.42],
-    [1.932, 2.6, 0.35],
-    [2.546, 2.2, 0.3],
-    [2.63, 2.0, 0.26],
-    [3.358, 1.6, 0.2],
-    [4.1, 1.2, 0.16],
-    [5.4, 0.9, 0.1]
-  ].forEach(([m, d, a]) => {
-    const oo = oscN('sine', base * m);
-    oo.frequency.setValueAtTime(base * m * 1.012, t);
-    oo.frequency.exponentialRampToValueAtTime(base * m, t + 0.6);
-    const gg = gainN(0);
-    gg.gain.setValueAtTime(0.0001, t);
-    gg.gain.exponentialRampToValueAtTime(a * 0.55, t + 0.012);
-    gg.gain.exponentialRampToValueAtTime(0.0001, t + d);
-    oo.connect(gg).connect(out);
-    oo.start(t);
-    oo.stop(t + d + 0.05);
-  });
-}
-
-function sfxRiser(t, dur) {
-  if (!ok()) return;
-  const out = outChain(0.6, 0, 0.4);
-  const n = noiseN();
-  const bp = filt('bandpass', 300, 3);
-  bp.frequency.setValueAtTime(300, t);
-  bp.frequency.exponentialRampToValueAtTime(7000, t + dur);
-  const g = gainN(0);
-  g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(0.5, t + dur * 0.95);
-  g.gain.linearRampToValueAtTime(0, t + dur);
-  n.connect(bp).connect(g).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + dur + 0.02);
-}
-
-// ── 집에서 들고 나온 산탄총, 현관문 ──
-function sfxClickAt(t, f, v, dur = 0.02, q = 5) {
-  const out = outChain(v, 0, 0);
-  const n = noiseN(rand(0.9, 1.2));
-  const bp = filt('bandpass', f, q);
-  const g = gainN(0);
-  envAD(g.gain, t, 0.0008, 1, dur);
-  n.connect(bp).connect(g).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + dur + 0.03);
-  const o = oscN('square', f * 0.5);
-  const g2 = gainN(0);
-  envAD(g2.gain, t, 0.0005, 0.12, dur * 0.6);
-  o.connect(g2).connect(out);
-  o.start(t);
-  o.stop(t + dur + 0.02);
-}
-let SG_CURVE = null;
-
-function sfxShotgunOut(pan = 0) {
-  if (!sfxGate(3, 0.9)) return;
-  const t = ac.currentTime + 0.002;
-  const out = outChain(1.1, pan * 0.5, 0.9);
-  const sh = ac.createWaveShaper();
-  sh.curve = SG_CURVE || (SG_CURVE = makeCurve(4.5));
-  sh.connect(out);
-  // 찢어지는 앞소리 + 길게 꺼지는 몸통 + 가슴을 치는 저음
-  const n1 = noiseN(rand(0.85, 1.0));
-  const hp = filt('highpass', 1600, 0.6);
-  const g1 = gainN(0);
-  envAD(g1.gain, t, 0.0008, 1.0, 0.08);
-  n1.connect(hp).connect(g1).connect(sh);
-  n1.start(t, rand(0, 2));
-  n1.stop(t + 0.12);
-  const n2 = noiseN(0.8);
-  const lp = filt('lowpass', 5000, 0.7);
-  lp.frequency.setValueAtTime(5200, t);
-  lp.frequency.exponentialRampToValueAtTime(160, t + 0.45);
-  const g2 = gainN(0);
-  envAD(g2.gain, t, 0.002, 1.2, 0.48);
-  n2.connect(lp).connect(g2).connect(sh);
-  n2.start(t, rand(0, 2));
-  n2.stop(t + 0.55);
-  const o = oscN('sine', 90);
-  o.frequency.setValueAtTime(110, t);
-  o.frequency.exponentialRampToValueAtTime(30, t + 0.3);
-  const g3 = gainN(0);
-  envAD(g3.gain, t, 0.003, 1.5, 0.34);
-  o.connect(g3).connect(sh);
-  o.start(t);
-  o.stop(t + 0.4);
-  const o2 = oscN('triangle', 55);
-  const g5 = gainN(0);
-  envAD(g5.gain, t + 0.01, 0.01, 0.7, 0.5);
-  o2.connect(g5).connect(out);
-  o2.start(t);
-  o2.stop(t + 0.6);
-}
-// 철컥-척 (펌프)
-function sfxPumpOut(d = 0) {
-  if (!sfxGate(2, 0.4)) return;
-  const t = ac.currentTime + d;
-  sfxClickAt(t, 1100, 0.75, 0.05, 2.5);
-  sfxClickAt(t + 0.02, 2600, 0.4, 0.03, 6);
-  sfxClickAt(t + 0.2, 1400, 0.85, 0.05, 2.5);
-  sfxClickAt(t + 0.215, 3400, 0.55, 0.03, 8);
-}
-// 빈 산탄총을 바닥에 던짐
-function sfxGunDrop(pan = 0, d = 0.12) {
-  if (!sfxGate(1, 0.4 + d)) return;
-  const t = ac.currentTime + d;
-  const out = outChain(0.55, pan * 0.5, 0.2);
-  const n = noiseN(0.7);
-  const lp = filt('lowpass', 900, 1);
-  const g = gainN(0);
-  envAD(g.gain, t, 0.003, 0.9, 0.12);
-  n.connect(lp).connect(g).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.16);
-  sfxClickAt(t + 0.01, 2400, 0.35, 0.03, 6);
-  sfxClickAt(t + 0.11, 1800, 0.25, 0.03, 5);
-}
-// 현관문이 쾅 닫힘
-function sfxDoorSlamOut() {
-  if (!ok()) return;
-  const t = ac.currentTime + 0.01;
-  const out = outChain(1.05, 0, 0.7);
-  const o = oscN('sine', 92);
-  o.frequency.setValueAtTime(115, t);
-  o.frequency.exponentialRampToValueAtTime(42, t + 0.25);
-  const g = gainN(0);
-  envAD(g.gain, t, 0.003, 1.1, 0.3);
-  o.connect(g).connect(out);
-  o.start(t);
-  o.stop(t + 0.36);
-  const n = noiseN(0.9);
-  const bp = filt('bandpass', 700, 1.3);
-  const g2 = gainN(0);
-  envAD(g2.gain, t, 0.002, 1.0, 0.16);
-  n.connect(bp).connect(g2).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.22);
-  sfxClickAt(t + 0.03, 2500, 0.6, 0.03, 6);
-  sfxClickAt(t + 0.08, 3300, 0.35, 0.02, 7);
-}
+const A = {};
+const ok = () => audio.ctx && (audio.ctx.state === 'running');
 
 // ── 목소리 ──
 function voicesPlaying() {
   let n = 0;
-  for (const h of activeVoices)
+  for (const h of audio.activeVoices)
     if (!h.stopped) n++;
   return n;
 }
 
-function playVoice(key, o = {}) {
-  if (!ok() || !VO[key]) return null;
-  const buf = VO[key];
-  const rate = o.rate || 1;
-  const src = ac.createBufferSource();
-  src.buffer = buf;
-  src.playbackRate.value = rate;
-  const g = gainN(o.gain === undefined ? 1 : o.gain);
-  let node = src;
-  let lfo = null, lfo2 = null;
-  if (o.sob) {
-    // 울먹임: 음높이 떨림 + 숨 떨림
-    lfo = oscN('sine', rand(5.6, 7.4));
-    const lg = gainN(o.sob * rate);
-    lfo.connect(lg);
-    lg.connect(src.playbackRate);
-    const trem = gainN(0.78);
-    lfo2 = oscN('sine', rand(4.5, 6));
-    const tg = gainN(0.22);
-    lfo2.connect(tg);
-    tg.connect(trem.gain);
-    node.connect(trem);
-    node = trem;
-    lfo.start();
-    lfo2.start();
-  }
-  if (o.lp) {
-    const f = filt('lowpass', o.lp, 0.7);
-    node.connect(f);
-    node = f;
-  }
-  node.connect(g);
-  let tail = g;
-  if (ac.createStereoPanner) {
-    const p = ac.createStereoPanner();
-    p.pan.value = THREE.MathUtils.clamp(o.pan || 0, -1, 1);
-    g.connect(p);
-    tail = p;
-  }
-  tail.connect(A.voice);
-  const vs = gainN(o.verb === undefined ? 0.22 : o.verb);
-  g.connect(vs);
-  vs.connect(A.verb);
-  const t0 = ac.currentTime;
-  src.start(t0);
-  const h = {
-    key,
-    src,
-    g,
-    t0,
-    rate,
-    dur: buf.duration / rate,
-    stopped: false,
-    progress() {
-      return THREE.MathUtils.clamp((ac.currentTime - h.t0) / h.dur, 0, 1);
-    },
-    stop(fast = 0.012) {
-      if (h.stopped) return;
-      h.stopped = true;
-      const t = ac.currentTime;
-      try {
-        g.gain.cancelScheduledValues(t);
-        g.gain.setValueAtTime(g.gain.value, t);
-        g.gain.linearRampToValueAtTime(0, t + fast);
-        src.stop(t + fast + 0.01);
-      } catch { }
-      try {
-        if (lfo) lfo.stop(t + fast + 0.02);
-        if (lfo2) lfo2.stop(t + fast + 0.02);
-      } catch { }
-    },
-  };
-  src.onended = () => {
-    h.stopped = true;
-    activeVoices.delete(h);
-    try {
-      if (lfo) lfo.stop();
-      if (lfo2) lfo2.stop();
-    } catch { }
-  };
-  activeVoices.add(h);
-  return h;
-}
-
 function stopAllVoices() {
-  for (const h of activeVoices) h.stop(0.05);
-  activeVoices.clear();
+  for (const h of audio.activeVoices) h.stop(0.05);
+  audio.activeVoices.clear();
 }
 
 // ───────────────────────── 음악 (90년대 격투게임 레이브, 140BPM) ─────────────────────────
 // 후버 스탭(뿡빵) + 오케스트라 히트 + 군중 함성 + 구르는 베이스 + 기관총 아르페지오. D 프리지안.
-const BPM = 140,
-  SPB = 60 / BPM,
-  S16 = SPB / 4;
+const BPM = 140, SPB = 60 / BPM, S16 = SPB / 4;
 const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
-const ROOTS = [38, 38, 41, 39]; // D D F Eb — 4마디 진행
-const BASS_PAT = [0, 0, 12, 0, 0, 12, 0, 0, 12, 0, 0, 12, 0, 0, 12, 0]; // 3-3-2 옥타브 악센트
-// 후버 리프 [스텝, 음, 길이(16분)] — 마디마다 (4마디 한 바퀴). 마지막 마디는 반음 이웃(Eb, C#)으로 D를 조인다.
-const RIFF = [
-  [
-    [0, 62, 2],
-    [3, 62, 1],
-    [6, 74, 2],
-    [8, 62, 1],
-    [10, 62, 1],
-    [12, 65, 2],
-    [14, 63, 2]
-  ],
-  [
-    [0, 62, 2],
-    [3, 62, 1],
-    [6, 74, 2],
-    [8, 62, 1],
-    [10, 60, 1],
-    [12, 62, 3]
-  ],
-  [
-    [0, 65, 2],
-    [3, 65, 1],
-    [6, 77, 2],
-    [8, 65, 1],
-    [10, 65, 1],
-    [12, 67, 2],
-    [14, 65, 2]
-  ],
-  [
-    [0, 63, 2],
-    [3, 63, 1],
-    [6, 75, 2],
-    [8, 63, 1],
-    [10, 62, 1],
-    [12, 63, 2],
-    [14, 61, 2]
-  ],
-];
-// 기관총 아르페지오 (16분음표 16개)
-const ARP = [
-  [74, 74, 86, 74, 74, 86, 74, 74, 86, 74, 74, 86, 74, 74, 86, 74],
-  [74, 77, 81, 86, 84, 81, 77, 74, 75, 77, 81, 87, 86, 84, 81, 77],
-  [77, 77, 89, 77, 77, 89, 77, 77, 89, 77, 77, 89, 77, 77, 89, 77],
-  [75, 75, 87, 75, 75, 87, 75, 75, 87, 75, 86, 75, 84, 75, 82, 75],
-];
-const CURVE_HARD = makeCurve(3.2),
-  CURVE_SOFT = makeCurve(1.6);
+const CURVE_HARD = AudioEngine.makeCurve(3.2),
+  CURVE_SOFT = AudioEngine.makeCurve(1.6);
 const MU = {
   on: false,
   bus: null,
@@ -1122,25 +161,25 @@ const MU = {
 
 // 음악 버스: 덕킹(킥마다 눌림) → 버스, 짧은 잔향 + 큰 홀 + 점8분 딜레이
 function musicBusBuild(dest) {
-  const bus = gainN(1);
+  const bus = audio.gain(1);
   bus.connect(dest);
-  const duck = gainN(1);
+  const duck = audio.gain(1);
   duck.connect(bus);
-  const verb = ac.createConvolver();
-  verb.buffer = makeIR(0.8, 4.2);
-  const mv = gainN(0.16);
+  const verb = audio.ctx.createConvolver();
+  verb.buffer = audio.makeIR(0.8, 4.2);
+  const mv = audio.gain(0.16);
   verb.connect(mv);
   mv.connect(bus);
-  const hall = ac.createConvolver();
-  hall.buffer = makeIR(1.9, 2.8);
-  const hv = gainN(0.3);
+  const hall = audio.ctx.createConvolver();
+  hall.buffer = audio.makeIR(1.9, 2.8);
+  const hv = audio.gain(0.3);
   hall.connect(hv);
   hv.connect(bus);
-  const delay = ac.createDelay(1);
+  const delay = audio.ctx.createDelay(1);
   delay.delayTime.value = S16 * 3;
-  const fb = gainN(0.25),
-    wet = gainN(0.16),
-    lp = filt('lowpass', 2800, 0.5);
+  const fb = audio.gain(0.25),
+    wet = audio.gain(0.16),
+    lp = audio.filter('lowpass', 2800, 0.5);
   delay.connect(lp);
   lp.connect(fb);
   fb.connect(delay);
@@ -1166,7 +205,7 @@ let MUSIC_BUF = null,
   musicRendering = false;
 
 function renderMusicBuffer() {
-  if (MUSIC_BUF || musicRendering || !ac) return;
+  if (MUSIC_BUF || musicRendering || !audio.ctx) return;
   const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
   if (!OAC) return;
   const sr = 32000,
@@ -1185,6 +224,7 @@ function renderMusicBuffer() {
   };
   let save = null;
   const swapIn = () => {
+    let ac = audio.ctx;
     save = {
       ac,
       A: Object.assign({}, A),
@@ -1195,14 +235,14 @@ function renderMusicBuffer() {
     Object.assign(MU, R.MU);
   };
   const swapOut = () => {
-    ac = save.ac;
+    audio.ctx = save.ac;
     Object.assign(A, save.A);
     Object.assign(MU, save.MU);
     save = null;
   };
   try {
     swapIn();
-    R.A.music = gainN(1);
+    R.A.music = audio.gain(1);
     R.A.music.connect(off.destination); // 음악 버스(0.4)는 나중에 실시간에서 곱한다
     Object.assign(R.MU, musicBusBuild(R.A.music));
     swapOut();
@@ -1221,9 +261,7 @@ function renderMusicBuffer() {
         musicStep(32 + step, step * S16);
         step++;
       }
-    } finally {
-      swapOut();
-    }
+    } finally { swapOut(); }
   };
   schedUntil(1.2);
   for (let t = 1; t < dur - 0.05; t += 1) {
@@ -1240,14 +278,12 @@ function renderMusicBuffer() {
     musicRendering = false;
   };
   const p = off.startRendering();
-  if (p && p.then) p.then(done, () => {
-    musicRendering = false;
-  });
+  if (p && p.then) p.then(done, () => musicRendering = false);
   else off.oncomplete = (e) => done(e.renderedBuffer);
 }
 
 function musicBufSource(fromStep, t0) {
-  const src = ac.createBufferSource();
+  const src = audio.ctx.createBufferSource();
   src.buffer = MUSIC_BUF;
   src.loop = true;
   src.loopStart = MUSIC_LOOP0;
@@ -1266,12 +302,12 @@ function musicStart(t0, fromStep = 0) {
   if (!ok()) return;
   musicStop(true);
   if (MUSIC_BUF && fromStep >= 32) {
-    MU.bus = gainN(1);
-    MU.bus.connect(A.music);
+    MU.bus = audio.gain(1);
+    MU.bus.connect(audio.nodes.music);
     musicBufSource(fromStep, t0);
     return;
   }
-  Object.assign(MU, musicBusBuild(A.music));
+  Object.assign(MU, musicBusBuild(audio.nodes.music));
   MU.on = true;
   MU.step = fromStep;
   MU.next = t0;
@@ -1282,12 +318,12 @@ function musicStart(t0, fromStep = 0) {
 }
 // 실시간 연주 중에 녹음이 끝나면: 아직 안 짠 다음 16분음표부터 녹음본이 이어받는다
 function musicHandoff() {
-  if (!MU.on || MU.src || !MU.bus || !ac || !MUSIC_BUF) return;
+  if (!MU.on || MU.src || !MU.bus || !audio.ctx || !MUSIC_BUF) return;
   let st = MU.step,
     t = MU.next;
   if (st < 32) return;
-  if (t < ac.currentTime + 0.01) {
-    const skip = Math.ceil((ac.currentTime + 0.01 - t) / S16);
+  if (t < audio.ctx.currentTime + 0.01) {
+    const skip = Math.ceil((audio.ctx.currentTime + 0.01 - t) / S16);
     st += skip;
     t += skip * S16;
   }
@@ -1300,8 +336,8 @@ function musicHandoff() {
       old.disconnect();
     } catch { }
   }, 3000);
-  MU.bus = gainN(1);
-  MU.bus.connect(A.music);
+  MU.bus = audio.gain(1);
+  MU.bus.connect(audio.nodes.music);
   musicBufSource(st, t);
 }
 
@@ -1309,8 +345,8 @@ function musicStop(hard) {
   if (!MU.bus) return;
   MU.on = false;
   clearInterval(MU.timer);
-  if (!ac) return;
-  const t = ac.currentTime,
+  if (!audio.ctx) return;
+  const t = audio.ctx.currentTime,
     b = MU.bus,
     src = MU.src;
   b.gain.cancelScheduledValues(t);
@@ -1331,17 +367,17 @@ function musicStop(hard) {
 }
 // 지금 몇 번째 16분음표인지 (다시 짤 때 이어서 틀기용)
 function musicNowStep() {
-  return MU.src ? MU.from + Math.max(0, Math.floor((ac.currentTime - MU.t0) / S16)) : MU.step;
+  return MU.src ? MU.from + Math.max(0, Math.floor((audio.ctx.currentTime - MU.t0) / S16)) : MU.step;
 }
 
 function musicTick() {
-  if (!MU.on || !ac || MU.src) return;
-  if (MU.next < ac.currentTime - 0.03) {
-    const skip = Math.ceil((ac.currentTime - MU.next) / S16);
+  if (!MU.on || !audio.ctx || MU.src) return;
+  if (MU.next < audio.ctx.currentTime - 0.03) {
+    const skip = Math.ceil((audio.ctx.currentTime - MU.next) / S16);
     MU.step += skip;
     MU.next += skip * S16;
   }
-  while (MU.next < ac.currentTime + 0.14) {
+  while (MU.next < audio.ctx.currentTime + 0.14) {
     musicStep(MU.step, MU.next);
     MU.step++;
     MU.next += S16;
@@ -1351,23 +387,22 @@ function musicTick() {
 // ── 악기 ──
 function mKick(t, v = 1) {
   // 909풍: 높은 데서 훅 떨어지는 몸통을 찌그러뜨려 '퍽' + 짧은 클릭
-  const o = oscN('sine', 200),
-    g = gainN(0);
+  const o = audio.osc('sine', 200), g = audio.gain(0);
   o.frequency.setValueAtTime(210, t);
   o.frequency.exponentialRampToValueAtTime(56, t + 0.045);
   o.frequency.exponentialRampToValueAtTime(42, t + 0.26);
-  envAD(g.gain, t, 0.001, 1.1 * v, 0.33);
-  const sh = ac.createWaveShaper();
+  AudioEngine.envAD(g.gain, t, 0.001, 1.1 * v, 0.33);
+  const sh = audio.ctx.createWaveShaper();
   sh.curve = CURVE_HARD;
   sh.oversample = '2x';
-  const post = gainN(0.85);
+  const post = audio.gain(0.85);
   o.connect(g).connect(sh).connect(post).connect(MU.bus);
   o.start(t);
   o.stop(t + 0.36);
-  const n = noiseN(),
-    hp = filt('highpass', 2600, 0.8),
-    gn = gainN(0);
-  envAD(gn.gain, t, 0.0005, 0.32 * v, 0.016);
+  const n = audio.noiseSource(),
+    hp = audio.filter('highpass', 2600, 0.8),
+    gn = audio.gain(0);
+  AudioEngine.envAD(gn.gain, t, 0.0005, 0.32 * v, 0.016);
   n.connect(hp).connect(gn).connect(MU.bus);
   n.start(t, rand(0, 2));
   n.stop(t + 0.03);
@@ -1377,23 +412,16 @@ function mKick(t, v = 1) {
 
 function mSnare(t, v = 1) {
   // 909풍 스네어: 몸통 음 두 개 + 쏴 하는 노이즈(클랩처럼 세 번 튐) + 80년대식 게이트 잔향
-  for (const [f0, f1, a, d] of [
-    [185, 150, 0.5, 0.12],
-    [330, 280, 0.25, 0.08]
-  ]) {
-    const o = oscN('triangle', f0),
-      g = gainN(0);
+  for (const [f0, f1, a, d] of [[185, 150, 0.5, 0.12], [330, 280, 0.25, 0.08]]) {
+    const o = audio.osc('triangle', f0), g = audio.gain(0);
     o.frequency.setValueAtTime(f0, t);
     o.frequency.exponentialRampToValueAtTime(f1, t + 0.06);
-    envAD(g.gain, t, 0.001, a * v, d);
+    AudioEngine.envAD(g.gain, t, 0.001, a * v, d);
     o.connect(g).connect(MU.bus);
     o.start(t);
     o.stop(t + d + 0.02);
   }
-  const n = noiseN(),
-    hp = filt('highpass', 1400, 0.7),
-    lp = filt('lowpass', 9000, 0.7),
-    g = gainN(0);
+  const n = audio.noiseSource(), hp = audio.filter('highpass', 1400, 0.7), lp = audio.filter('lowpass', 9000, 0.7), g = audio.gain(0);
   g.gain.setValueAtTime(0.0001, t);
   [0, 0.009, 0.019].forEach((d) => {
     g.gain.setValueAtTime(0.5 * v, t + d);
@@ -1404,9 +432,9 @@ function mSnare(t, v = 1) {
   n.connect(hp).connect(lp).connect(g).connect(MU.bus);
   n.start(t, rand(0, 2));
   n.stop(t + 0.22);
-  const n2 = noiseN(),
-    bp = filt('bandpass', 2200, 0.6),
-    g2 = gainN(0);
+  const n2 = audio.noiseSource(),
+    bp = audio.filter('bandpass', 2200, 0.6),
+    g2 = audio.gain(0);
   g2.gain.setValueAtTime(0.0001, t);
   g2.gain.linearRampToValueAtTime(0.16 * v, t + 0.03);
   g2.gain.setValueAtTime(0.16 * v, t + 0.13);
@@ -1414,18 +442,18 @@ function mSnare(t, v = 1) {
   n2.connect(bp).connect(g2).connect(MU.bus);
   n2.start(t, rand(0, 2));
   n2.stop(t + 0.17);
-  const rv = gainN(0.3);
+  const rv = audio.gain(0.3);
   g.connect(rv);
   rv.connect(MU.verb);
 }
 
 function mHat(t, v, open) {
-  const n = noiseN(),
-    hp = filt('highpass', open ? 6000 : 7500, 0.7),
-    pk = filt('peaking', 10000, 1.2),
-    g = gainN(0);
+  const n = audio.noiseSource(),
+    hp = audio.filter('highpass', open ? 6000 : 7500, 0.7),
+    pk = audio.filter('peaking', 10000, 1.2),
+    g = audio.gain(0);
   pk.gain.value = 6;
-  envAD(g.gain, t, 0.0006, (open ? 0.2 : 0.14) * v, open ? 0.2 : 0.03);
+  AudioEngine.envAD(g.gain, t, 0.0006, (open ? 0.2 : 0.14) * v, open ? 0.2 : 0.03);
   n.connect(hp).connect(pk).connect(g).connect(MU.bus);
   n.start(t, rand(0, 2));
   n.stop(t + (open ? 0.26 : 0.05));
@@ -1434,21 +462,21 @@ function mHat(t, v, open) {
 function mBass(t, m, dur, acc) {
   // 톱니+사각+사인 서브, 공진 큰 필터를 악센트마다 열고 찌그러뜨린다
   const f = mtof(m),
-    o1 = oscN('sawtooth', f),
-    o2 = oscN('square', f),
-    sub = oscN('sine', f);
+    o1 = audio.osc('sawtooth', f),
+    o2 = audio.osc('square', f),
+    sub = audio.osc('sine', f);
   o1.detune.value = -6;
   o2.detune.value = 6;
-  const lp = filt('lowpass', 800, 5);
+  const lp = audio.filter('lowpass', 800, 5);
   lp.frequency.setValueAtTime(420 + 2200 * acc, t);
   lp.frequency.exponentialRampToValueAtTime(170, t + dur);
-  const sh = ac.createWaveShaper();
+  const sh = audio.ctx.createWaveShaper();
   sh.curve = A.shaper;
-  const g = gainN(0);
-  envAD(g.gain, t, 0.002, 0.3 * (0.85 + acc * 0.3), dur);
-  const g2 = gainN(0.35),
-    gs = gainN(0);
-  envAD(gs.gain, t, 0.002, 0.22, dur);
+  const g = audio.gain(0);
+  AudioEngine.envAD(g.gain, t, 0.002, 0.3 * (0.85 + acc * 0.3), dur);
+  const g2 = audio.gain(0.35),
+    gs = audio.gain(0);
+  AudioEngine.envAD(gs.gain, t, 0.002, 0.22, dur);
   o1.connect(lp);
   o2.connect(g2).connect(lp);
   lp.connect(sh).connect(g).connect(MU.duck);
@@ -1462,12 +490,12 @@ function mBass(t, m, dur, acc) {
 function mHoover(t, m, steps, v = 1, thin = false) {
   const dur = Math.max(0.06, steps * S16 - 0.015),
     f = mtof(m);
-  const lp = filt('lowpass', 2600, 1.4);
+  const lp = audio.filter('lowpass', 2600, 1.4);
   lp.frequency.setValueAtTime(4500, t);
   lp.frequency.exponentialRampToValueAtTime(2200, t + Math.max(0.08, dur));
-  const sh = ac.createWaveShaper();
+  const sh = audio.ctx.createWaveShaper();
   sh.curve = CURVE_SOFT;
-  const g = gainN(0);
+  const g = audio.gain(0);
   g.gain.setValueAtTime(0.0001, t);
   g.gain.exponentialRampToValueAtTime(0.34 * v, t + 0.006);
   g.gain.setValueAtTime(0.34 * v, t + dur - 0.02);
@@ -1484,8 +512,8 @@ function mHoover(t, m, steps, v = 1, thin = false) {
   ];
   let lfoTarget = null;
   for (const [mul, det, a, type] of layers) {
-    const osc = oscN(type, f * mul),
-      ga = gainN(a * 0.3);
+    const osc = audio.osc(type, f * mul),
+      ga = audio.gain(a * 0.3);
     osc.detune.value = det;
     osc.frequency.setValueAtTime(f * mul * 1.6, t);
     osc.frequency.exponentialRampToValueAtTime(f * mul, t + (steps >= 3 ? 0.11 : 0.065));
@@ -1495,18 +523,18 @@ function mHoover(t, m, steps, v = 1, thin = false) {
     if (det === 0 && mul === 1) lfoTarget = osc;
   }
   if (lfoTarget) {
-    const lfo = oscN('sine', 5.5),
-      lg = gainN(14);
+    const lfo = audio.osc('sine', 5.5),
+      lg = audio.gain(14);
     lfo.connect(lg);
     lg.connect(lfoTarget.detune);
     lfo.start(t);
     lfo.stop(t + dur + 0.06);
   }
   lp.connect(sh).connect(g).connect(MU.duck);
-  const rv = gainN(0.28);
+  const rv = audio.gain(0.28);
   g.connect(rv);
   rv.connect(MU.verb);
-  const ds = gainN(0.14);
+  const ds = audio.gain(0.14);
   g.connect(ds);
   ds.connect(MU.delay);
 }
@@ -1517,22 +545,19 @@ function mStab(t, m, steps, v = 1) {
 }
 // 오케스트라 히트: 단3화음을 옥타브로 쌓은 금관 + 팀파니 쿵 + 스냅, 큰 홀 잔향
 function mOrch(t, root, v = 1) {
-  const lp = filt('lowpass', 5000, 0.9);
+  const lp = audio.filter('lowpass', 5000, 0.9);
   lp.frequency.setValueAtTime(6000, t);
   lp.frequency.exponentialRampToValueAtTime(1300, t + 0.35);
-  const g = gainN(0);
+  const g = audio.gain(0);
   g.gain.setValueAtTime(0.0001, t);
   g.gain.exponentialRampToValueAtTime(0.09 * v, t + 0.004);
   g.gain.exponentialRampToValueAtTime(0.045 * v, t + 0.12);
   g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
   for (const iv of [0, 12, 19, 24, 27, 31, 36]) {
     const f = mtof(root + iv);
-    for (const [type, a] of [
-      ['sawtooth', 1],
-      ['square', 0.35]
-    ]) {
-      const o = oscN(type, f),
-        ga = gainN(a);
+    for (const [type, a] of [['sawtooth', 1], ['square', 0.35]]) {
+      const o = audio.osc(type, f),
+        ga = audio.gain(a);
       o.detune.value = rand(-8, 8);
       o.frequency.setValueAtTime(f * 1.02, t);
       o.frequency.exponentialRampToValueAtTime(f, t + 0.05);
@@ -1541,28 +566,28 @@ function mOrch(t, root, v = 1) {
       o.stop(t + 0.55);
     }
   }
-  const sh = ac.createWaveShaper();
+  const sh = audio.ctx.createWaveShaper();
   sh.curve = CURVE_SOFT;
   lp.connect(sh).connect(g).connect(MU.bus);
-  const o = oscN('sine', 110),
-    og = gainN(0);
+  const o = audio.osc('sine', 110),
+    og = audio.gain(0);
   o.frequency.setValueAtTime(120, t);
   o.frequency.exponentialRampToValueAtTime(52, t + 0.2);
-  envAD(og.gain, t, 0.002, 0.6 * v, 0.3);
+  AudioEngine.envAD(og.gain, t, 0.002, 0.6 * v, 0.3);
   o.connect(og).connect(MU.bus);
   o.start(t);
   o.stop(t + 0.35);
-  const n = noiseN(),
-    bp = filt('bandpass', 1800, 1),
-    ng = gainN(0);
-  envAD(ng.gain, t, 0.001, 0.4 * v, 0.04);
+  const n = audio.noiseSource(),
+    bp = audio.filter('bandpass', 1800, 1),
+    ng = audio.gain(0);
+  AudioEngine.envAD(ng.gain, t, 0.001, 0.4 * v, 0.04);
   n.connect(bp).connect(ng).connect(MU.bus);
   n.start(t, rand(0, 2));
   n.stop(t + 0.06);
-  const rv = gainN(0.9);
+  const rv = audio.gain(0.9);
   g.connect(rv);
   rv.connect(MU.hall);
-  const rv2 = gainN(0.5);
+  const rv2 = audio.gain(0.5);
   og.connect(rv2);
   rv2.connect(MU.hall);
 }
@@ -1577,11 +602,11 @@ function mShout(t, v = 1, kind = 0) {
     [1900, 9, 0.55],
     [2600, 10, 0.3]
   ];
-  const mix = gainN(0.22),
-    pre = gainN(1);
+  const mix = audio.gain(0.22),
+    pre = audio.gain(1);
   [118, 136, 152, 171, 196].forEach((b) => {
     const f0 = b * rand(0.97, 1.03),
-      o = oscN('sawtooth', f0);
+      o = audio.osc('sawtooth', f0);
     o.frequency.setValueAtTime(f0 * 1.28, t);
     o.frequency.exponentialRampToValueAtTime(f0, t + 0.07);
     o.frequency.exponentialRampToValueAtTime(f0 * 0.8, t + 0.28);
@@ -1590,8 +615,8 @@ function mShout(t, v = 1, kind = 0) {
     o.stop(t + 0.34);
   });
   // 여러 명이 외치는 거친 질감: 모음 필터에 숨소리 노이즈도 같이 넣는다
-  const nv = noiseN(),
-    nvg = gainN(0);
+  const nv = audio.noiseSource(),
+    nvg = audio.gain(0);
   nvg.gain.setValueAtTime(0.0001, t);
   nvg.gain.exponentialRampToValueAtTime(0.5, t + 0.03);
   nvg.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
@@ -1599,41 +624,41 @@ function mShout(t, v = 1, kind = 0) {
   nv.start(t, rand(0, 2));
   nv.stop(t + 0.32);
   for (const [f, q, a] of F) {
-    const bp = filt('bandpass', f, q),
-      g = gainN(a);
+    const bp = audio.filter('bandpass', f, q),
+      g = audio.gain(a);
     pre.connect(bp).connect(g).connect(mix);
   }
   const t1 = Math.max(0, t - 0.01);
-  const n = noiseN(),
-    bp = filt('bandpass', 1600, 0.8),
-    ng = gainN(0);
-  envAD(ng.gain, t1, 0.005, 0.25, 0.05);
+  const n = audio.noiseSource(),
+    bp = audio.filter('bandpass', 1600, 0.8),
+    ng = audio.gain(0);
+  AudioEngine.envAD(ng.gain, t1, 0.005, 0.25, 0.05);
   n.connect(bp).connect(ng).connect(mix);
   n.start(t1, rand(0, 2));
   n.stop(t + 0.08);
-  const sh = ac.createWaveShaper();
+  const sh = audio.ctx.createWaveShaper();
   sh.curve = CURVE_SOFT;
-  const g = gainN(0);
+  const g = audio.gain(0);
   g.gain.setValueAtTime(0.0001, t);
   g.gain.exponentialRampToValueAtTime(1.5 * v, t + 0.025);
   g.gain.setValueAtTime(1.5 * v, t + 0.1);
   g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
   mix.connect(sh).connect(g).connect(MU.bus);
-  const rv = gainN(0.5);
+  const rv = audio.gain(0.5);
   g.connect(rv);
   rv.connect(MU.hall);
 }
 
 function mArp(t, m, cut, v = 1) {
-  const o = oscN('square', mtof(m)),
-    o2 = oscN('sawtooth', mtof(m)),
-    lp = filt('lowpass', cut, 2),
-    g = gainN(0),
-    g2 = gainN(0.6);
+  const o = audio.osc('square', mtof(m)),
+    o2 = audio.osc('sawtooth', mtof(m)),
+    lp = audio.filter('lowpass', cut, 2),
+    g = audio.gain(0),
+    g2 = audio.gain(0.6);
   o2.detune.value = 8;
   lp.frequency.setValueAtTime(cut * 1.6, t);
   lp.frequency.exponentialRampToValueAtTime(cut * 0.5, t + 0.09);
-  envAD(g.gain, t, 0.001, 0.2 * v, 0.085);
+  AudioEngine.envAD(g.gain, t, 0.001, 0.2 * v, 0.085);
   o.connect(lp);
   o2.connect(g2).connect(lp);
   lp.connect(g).connect(MU.duck);
@@ -1641,41 +666,41 @@ function mArp(t, m, cut, v = 1) {
   o2.start(t);
   o.stop(t + 0.1);
   o2.stop(t + 0.1);
-  const ds = gainN(0.3);
+  const ds = audio.gain(0.3);
   g.connect(ds);
   ds.connect(MU.delay);
 }
 // 브레이크용 긴장 패드 (반음 뭉친 화음이 서서히 열린다)
 function mPad(t, notes, dur, v = 1) {
-  const lp = filt('lowpass', 600, 1.2);
+  const lp = audio.filter('lowpass', 600, 1.2);
   lp.frequency.setValueAtTime(500, t);
   lp.frequency.exponentialRampToValueAtTime(2600, t + dur);
-  const g = gainN(0);
+  const g = audio.gain(0);
   g.gain.setValueAtTime(0.0001, t);
   g.gain.exponentialRampToValueAtTime(0.07 * v, t + dur * 0.5);
   g.gain.setValueAtTime(0.07 * v, t + dur - 0.05);
   g.gain.linearRampToValueAtTime(0, t + dur);
   for (const m of notes)
     for (const d of [-12, 0, 12]) {
-      const o = oscN('sawtooth', mtof(m));
+      const o = audio.osc('sawtooth', mtof(m));
       o.detune.value = d;
       o.connect(lp);
       o.start(t);
       o.stop(t + dur + 0.05);
     }
   lp.connect(g).connect(MU.bus);
-  const rv = gainN(0.5);
+  const rv = audio.gain(0.5);
   g.connect(rv);
   rv.connect(MU.hall);
 }
 
 function mDrone(t, m, dur, v = 1) {
   const f = mtof(m),
-    o = oscN('sine', f),
-    o2 = oscN('sawtooth', f),
-    lp = filt('lowpass', 220, 1),
-    g = gainN(0),
-    g2 = gainN(0.35);
+    o = audio.osc('sine', f),
+    o2 = audio.osc('sawtooth', f),
+    lp = audio.filter('lowpass', 220, 1),
+    g = audio.gain(0),
+    g2 = audio.gain(0.35);
   g.gain.setValueAtTime(0.0001, t);
   g.gain.exponentialRampToValueAtTime(0.1 * v, t + 0.05);
   g.gain.setValueAtTime(0.1 * v, t + dur - 0.1);
@@ -1690,70 +715,70 @@ function mDrone(t, m, dur, v = 1) {
 }
 
 function mTimp(t, v = 1, f = 73) {
-  const o = oscN('sine', f),
-    g = gainN(0);
+  const o = audio.osc('sine', f),
+    g = audio.gain(0);
   o.frequency.setValueAtTime(f * 1.3, t);
   o.frequency.exponentialRampToValueAtTime(f, t + 0.03);
   o.frequency.exponentialRampToValueAtTime(f * 0.85, t + 0.4);
-  envAD(g.gain, t, 0.002, 0.55 * v, 0.42);
-  const sh = ac.createWaveShaper();
+  AudioEngine.envAD(g.gain, t, 0.002, 0.55 * v, 0.42);
+  const sh = audio.ctx.createWaveShaper();
   sh.curve = A.shaper;
   o.connect(g).connect(sh).connect(MU.bus);
   o.start(t);
   o.stop(t + 0.5);
-  const n = noiseN(),
-    lp = filt('lowpass', 900, 0.8),
-    ng = gainN(0);
-  envAD(ng.gain, t, 0.001, 0.3 * v, 0.03);
+  const n = audio.noiseSource(),
+    lp = audio.filter('lowpass', 900, 0.8),
+    ng = audio.gain(0);
+  AudioEngine.envAD(ng.gain, t, 0.001, 0.3 * v, 0.03);
   n.connect(lp).connect(ng).connect(MU.bus);
   n.start(t, rand(0, 2));
   n.stop(t + 0.05);
-  const rv = gainN(0.35);
+  const rv = audio.gain(0.35);
   g.connect(rv);
   rv.connect(MU.hall);
 }
 
 function mCrash(t, v = 1) {
-  const n = noiseN(),
-    hp = filt('highpass', 3200, 0.5),
-    g = gainN(0);
-  envAD(g.gain, t, 0.001, 0.26 * v, 1.1);
+  const n = audio.noiseSource(),
+    hp = audio.filter('highpass', 3200, 0.5),
+    g = audio.gain(0);
+  AudioEngine.envAD(g.gain, t, 0.001, 0.26 * v, 1.1);
   n.connect(hp).connect(g).connect(MU.bus);
   n.start(t, rand(0, 2));
   n.stop(t + 1.2);
   for (const f of [3100, 4730, 6210]) {
-    const o = oscN('square', f),
-      og = gainN(0);
-    envAD(og.gain, t, 0.001, 0.02 * v, 0.6);
+    const o = audio.osc('square', f),
+      og = audio.gain(0);
+    AudioEngine.envAD(og.gain, t, 0.001, 0.02 * v, 0.6);
     o.connect(og).connect(MU.bus);
     o.start(t);
     o.stop(t + 0.7);
   }
-  const rv = gainN(0.3);
+  const rv = audio.gain(0.3);
   g.connect(rv);
   rv.connect(MU.hall);
 }
 
 function mTom(t, f, v = 1) {
-  const o = oscN('triangle', f),
-    g = gainN(0);
+  const o = audio.osc('triangle', f),
+    g = audio.gain(0);
   o.frequency.setValueAtTime(f * 1.15, t);
   o.frequency.exponentialRampToValueAtTime(f * 0.6, t + 0.16);
-  envAD(g.gain, t, 0.001, 0.45 * v, 0.18);
-  const sh = ac.createWaveShaper();
+  AudioEngine.envAD(g.gain, t, 0.001, 0.45 * v, 0.18);
+  const sh = audio.ctx.createWaveShaper();
   sh.curve = A.shaper;
   o.connect(g).connect(sh).connect(MU.bus);
   o.start(t);
   o.stop(t + 0.22);
-  const rv = gainN(0.25);
+  const rv = audio.gain(0.25);
   g.connect(rv);
   rv.connect(MU.verb);
 }
 
 function mSweep(t, dur, v = 1) {
-  const n = noiseN(),
-    bp = filt('bandpass', 400, 1.2),
-    g = gainN(0);
+  const n = audio.noiseSource(),
+    bp = audio.filter('bandpass', 400, 1.2),
+    g = audio.gain(0);
   bp.frequency.setValueAtTime(400, t);
   bp.frequency.exponentialRampToValueAtTime(8000, t + dur);
   g.gain.setValueAtTime(0.0001, t);
@@ -1766,8 +791,8 @@ function mSweep(t, dur, v = 1) {
 // 후버 사이렌: 한 옥타브 올라가며 필터가 열린다 (드롭 직전)
 function mRise(t, m, dur, v = 1) {
   const f = mtof(m),
-    lp = filt('lowpass', 800, 2),
-    g = gainN(0);
+    lp = audio.filter('lowpass', 800, 2),
+    g = audio.gain(0);
   lp.frequency.setValueAtTime(700, t);
   lp.frequency.exponentialRampToValueAtTime(5000, t + dur);
   g.gain.setValueAtTime(0.0001, t);
@@ -1775,7 +800,7 @@ function mRise(t, m, dur, v = 1) {
   g.gain.exponentialRampToValueAtTime(0.16 * v, t + dur);
   g.gain.linearRampToValueAtTime(0, t + dur + 0.01);
   for (const det of [-20, 0, 20]) {
-    const o = oscN('sawtooth', f);
+    const o = audio.osc('sawtooth', f);
     o.detune.value = det;
     o.frequency.setValueAtTime(f, t);
     o.frequency.exponentialRampToValueAtTime(f * 2, t + dur);
@@ -1783,10 +808,10 @@ function mRise(t, m, dur, v = 1) {
     o.start(t);
     o.stop(t + dur + 0.02);
   }
-  const sh = ac.createWaveShaper();
+  const sh = audio.ctx.createWaveShaper();
   sh.curve = CURVE_SOFT;
   lp.connect(sh).connect(g).connect(MU.bus);
-  const rv = gainN(0.3);
+  const rv = audio.gain(0.3);
   g.connect(rv);
   rv.connect(MU.hall);
 }
@@ -1920,9 +945,7 @@ function makeFloorTex() {
   g.strokeStyle = 'rgba(110, 100, 140, 0.085)';
   g.lineWidth = 3;
   g.strokeRect(1.5, 1.5, 253, 253);
-  return texOf(c, {
-    repeat: true
-  });
+  return texOf(c, { repeat: true });
 }
 
 // ── 군중 얼굴 (3×2: 기존 네 표정 + 4 서로를 훑을 때의 무표정) ──
@@ -1934,31 +957,6 @@ const FACE_OFF = [
   [2 / 3, 0.5]
 ];
 
-function drawTears(g, cx, ey, ex, alpha) {
-  for (const sx of [-1, 1]) {
-    const x0 = cx + sx * (ex + 11),
-      y0 = ey + 15;
-    g.lineCap = 'round';
-    g.lineJoin = 'round';
-    g.strokeStyle = `rgba(95, 190, 255, ${0.85 * alpha})`;
-    g.lineWidth = 11;
-    g.beginPath();
-    g.moveTo(x0, y0);
-    g.bezierCurveTo(x0 + sx * 8, y0 + 30, x0 - sx * 6, y0 + 58, x0 + sx * 6, y0 + 112);
-    g.stroke();
-    g.strokeStyle = `rgba(235, 250, 255, ${0.9 * alpha})`;
-    g.lineWidth = 3.5;
-    g.beginPath();
-    g.moveTo(x0 - sx * 2, y0 + 6);
-    g.bezierCurveTo(x0 + sx * 5, y0 + 30, x0 - sx * 8, y0 + 56, x0 + sx * 3, y0 + 100);
-    g.stroke();
-    // 눈물 방울
-    g.fillStyle = `rgba(95, 190, 255, ${0.9 * alpha})`;
-    g.beginPath();
-    g.ellipse(x0 + sx * 7, y0 + 118, 6, 8, 0, 0, TAU);
-    g.fill();
-  }
-}
 // 무광의 반쯤 감긴 군중 눈: 바깥 눈꼬리와 윗눈꺼풀이 아래로 처진다.
 function drawCrowdDeadEyes(g, cx, ey, ex) {
   const ink = '#2a1d26';
@@ -2025,8 +1023,7 @@ function drawCrowdFace(g, ox, oy, st) {
   g.strokeStyle = ink;
   g.lineWidth = 8;
   for (const sx of [-1, 1]) {
-    const inner = cx + sx * 14,
-      outer = cx + sx * 64;
+    const inner = cx + sx * 14, outer = cx + sx * 64;
     g.beginPath();
     g.moveTo(outer, 76);
     g.quadraticCurveTo(cx + sx * 40, 81, inner, 100);
@@ -2056,7 +1053,6 @@ function drawCrowdFace(g, ox, oy, st) {
       g.closePath();
       g.fill();
     }
-    drawTears(g, cx, ey, ex, st === 2 ? .65 : 1);
   }
   g.strokeStyle = ink;
   g.lineWidth = 5;
@@ -2404,51 +1400,6 @@ function makeBadgeTex() {
 
 // ── 2급·3급 얼굴 (4×2 아틀라스, 칸 512: 윗줄 평소 / 아랫줄 붙잡혀서 버둥) ──
 const ALLY_SKIN = '#fbd5bd';
-const ALLY_LOOK = [{
-  grade: 2,
-  eyeW: 42,
-  eyeH: 48,
-  hl: 2,
-  brow: '#3a2a20',
-  fem: false,
-  glasses: false,
-  smile: 15,
-  bags: false
-},
-{
-  grade: 3,
-  eyeW: 37,
-  eyeH: 42,
-  hl: 1,
-  brow: '#2a2024',
-  fem: true,
-  glasses: false,
-  smile: 9,
-  bags: true
-},
-{
-  grade: 2,
-  eyeW: 41,
-  eyeH: 47,
-  hl: 2,
-  brow: '#5a3a28',
-  fem: true,
-  glasses: false,
-  smile: 14,
-  bags: false
-},
-{
-  grade: 3,
-  eyeW: 36,
-  eyeH: 41,
-  hl: 1,
-  brow: '#1d1a1c',
-  fem: false,
-  glasses: true,
-  smile: 8,
-  bags: true
-},
-];
 
 function drawAllyFace(g, ox, oy, L, struggle) {
   g.save();
@@ -2634,8 +1585,7 @@ function drawAllyFace(g, ox, oy, L, struggle) {
 }
 
 function makeAllyFaceAtlas() {
-  const c = cnv(2048, 1024),
-    g = c.getContext('2d');
+  const c = cnv(2048, 1024), g = c.getContext('2d');
   ALLY_LOOK.forEach((L, k) => {
     drawAllyFace(g, k * 512, 0, L, false);
     drawAllyFace(g, k * 512, 512, L, true);
@@ -4172,9 +3122,7 @@ const H_DEFS = [
   ['knife', 'knife', 'vc', 'wrL', true, null, 'knife'],
 ];
 const HS = (() => {
-  const set = {
-    parts: []
-  };
+  const set = { parts: [] };
   const af = new THREE.InstancedBufferAttribute(new Float32Array(MAXH * 2), 2);
   const ab = new THREE.InstancedBufferAttribute(new Float32Array(MAXH * 2), 2);
   for (let i = 0; i < MAXH; i++) {
@@ -4208,14 +3156,7 @@ const HS = (() => {
       o.frustumCulled = false;
       scene.add(o);
     }
-    set.parts.push({
-      name,
-      m,
-      o,
-      node,
-      kind,
-      toggle
-    });
+    set.parts.push({ name, m, o, node, kind, toggle });
   }
   return set;
 })();
@@ -4289,17 +3230,7 @@ function addDecal(x, z, size, cell, rot, grow = 0) {
   aCell.setXY(i, BLOOD_OFF[cell][0], BLOOD_OFF[cell][1]);
   aCell.needsUpdate = true;
   const y = 0.004 + (i % 50) * 0.00012;
-  const d = {
-    i,
-    x,
-    z,
-    y,
-    rot,
-    size,
-    s: grow ? size * 0.15 : size,
-    t: 0,
-    dur: grow
-  };
+  const d = { i, x, z, y, rot, size, s: grow ? size * 0.15 : size, t: 0, dur: grow };
   setDecal(d);
   if (grow) growing.push(d);
   return d;
@@ -4330,16 +3261,7 @@ drops.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
 scene.add(drops);
 const dropS = [];
 for (let i = 0; i < DROP_MAX; i++) {
-  dropS.push({
-    on: false,
-    x: 0,
-    y: 0,
-    z: 0,
-    vx: 0,
-    vy: 0,
-    vz: 0,
-    r: 0.03
-  });
+  dropS.push({ on: false, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, r: 0.03 });
   drops.setMatrixAt(i, _zeroM);
 }
 let dropNext = 0;
@@ -4375,7 +3297,6 @@ function bloodSpurt(x, y, z, dx, dy, dz, n) {
     d.r = rand(0.016, 0.04);
   }
 }
-let splatBudget = 0;
 
 function updateDrops(dt) {
   for (let i = 0; i < DROP_MAX; i++) {
@@ -4404,72 +3325,6 @@ function clearDrops() {
     drops.setMatrixAt(i, _zeroM);
   }
   drops.instanceMatrix.needsUpdate = true;
-}
-
-// 눈물 방울
-const TEAR_MAX = 360;
-const tears = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 6, 5), new THREE.MeshBasicMaterial({
-  color: 0x2fa8ff
-}), TEAR_MAX);
-tears.frustumCulled = false;
-tears.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-scene.add(tears);
-const tearS = [];
-for (let i = 0; i < TEAR_MAX; i++) {
-  tearS.push({
-    on: false,
-    x: 0,
-    y: 0,
-    z: 0,
-    vx: 0,
-    vy: 0,
-    vz: 0,
-    r: 0.02
-  });
-  tears.setMatrixAt(i, _zeroM);
-}
-let tearNext = 0;
-
-function addTear(x, y, z, vx, vz, owner = null) {
-  const d = tearS[tearNext];
-  tearNext = (tearNext + 1) % TEAR_MAX;
-  d.on = true;
-  d.owner = owner;
-  d.x = x;
-  d.y = y;
-  d.z = z;
-  d.vx = vx + rand(-0.25, 0.25);
-  d.vz = vz + rand(-0.25, 0.25);
-  d.vy = rand(0.2, 0.9);
-  d.r = rand(0.02, 0.03);
-}
-
-function updateTears(dt) {
-  for (let i = 0; i < TEAR_MAX; i++) {
-    const d = tearS[i];
-    if (!d.on) continue;
-    d.vy -= 9 * dt;
-    d.x += d.vx * dt;
-    d.y += d.vy * dt;
-    d.z += d.vz * dt;
-    if (d.y < 0.01) {
-      d.on = false;
-      tears.setMatrixAt(i, _zeroM);
-      continue;
-    }
-    _m4.makeScale(d.r, d.r * 1.35, d.r);
-    _m4.setPosition(d.x, d.y, d.z);
-    tears.setMatrixAt(i, _m4);
-  }
-  tears.instanceMatrix.needsUpdate = true;
-}
-
-function clearTears() {
-  for (let i = 0; i < TEAR_MAX; i++) {
-    tearS[i].on = false;
-    tears.setMatrixAt(i, _zeroM);
-  }
-  tears.instanceMatrix.needsUpdate = true;
 }
 
 // 탄피
@@ -4508,8 +3363,7 @@ function ejectShell(x, y, z, dirx, dirz) {
   shellNext = (shellNext + 1) % SHELL_MAX;
   shellUsed = Math.min(SHELL_MAX, shellUsed + 1);
   // 탄피는 사격 방향의 오른쪽 위로 튄다
-  const rx = -dirz,
-    rz = dirx;
+  const rx = -dirz, rz = dirx;
   s.on = true;
   s.rest = false;
   s.x = x;
@@ -4543,7 +3397,7 @@ function updateShells(dt) {
     if (s.y < 0.014 && s.vy < 0) {
       s.y = 0.014;
       const sp = -s.vy;
-      if (s.bounces < 3) sfxTink(THREE.MathUtils.clamp(sp / 3, 0.25, 1), THREE.MathUtils.clamp((s.x - CAMX) / 6, -1, 1));
+      if (s.bounces < 3) sfx.tink(THREE.MathUtils.clamp(sp / 3, 0.25, 1), THREE.MathUtils.clamp((s.x - CAMX) / 6, -1, 1));
       s.bounces++;
       s.vy = sp * 0.38;
       s.vx *= 0.55;
@@ -4752,7 +3606,6 @@ const dangerRing = (() => {
 
 function fxUpdate(dt) {
   updateDrops(dt);
-  updateTears(dt);
   updateShells(dt);
   updateTracers(dt);
   updateBursts(dt);
@@ -4770,7 +3623,8 @@ function fxUpdate(dt) {
       if (f.t <= 0) f.sp.visible = false;
     }
   }
-  tinkBudget = Math.max(0, tinkBudget - dt * 5);
+
+  sfx.tinkBudget = Math.max(0, sfx.tinkBudget - dt * 5);
   // 주인공 텍스처 갱신은 몰아서
   FXDirty.t -= dt;
   if (FXDirty.t <= 0 && (FXDirty.face || FXDirty.shirt)) {
@@ -4790,7 +3644,6 @@ function fxClearAll() {
   for (const b of BURSTS) b.sp.visible = false;
   clearDecals();
   clearDrops();
-  clearTears();
   clearShells();
   for (let i = 0; i < TRACER_MAX; i++) {
     tracerS[i].on = false;
@@ -5648,18 +4501,9 @@ const G = {
   fireCD: 0,
   lastShotT: -9,
   modRepelT: 0,
-  stick: {
-    x: 0,
-    z: 0
-  },
-  keys: {
-    x: 0,
-    z: 0
-  },
-  input: {
-    x: 0,
-    z: 0
-  },
+  stick: { x: 0, z: 0 },
+  keys: { x: 0, z: 0 },
+  input: { x: 0, z: 0 },
   movedOnce: false,
   firedOnce: false,
   stabbedOnce: false,
@@ -5701,80 +4545,12 @@ const ME = {
   turn: 0,
   turnTo: 0,
 };
-const SLOTS = [{
-  x: 0.0,
-  z: -0.37,
-  kind: 'stand'
-},
-{
-  x: 0.31,
-  z: 0.13,
-  kind: 'kneel'
-},
-{
-  x: -0.31,
-  z: 0.13,
-  kind: 'kneel'
-},
-{
-  x: 0.56,
-  z: -0.08,
-  kind: 'side'
-},
-{
-  x: -0.56,
-  z: -0.08,
-  kind: 'side'
-},
-{
-  x: 0.34,
-  z: -0.34,
-  kind: 'stand'
-},
-{
-  x: -0.34,
-  z: -0.34,
-  kind: 'stand'
-},
-{
-  x: 0.0,
-  z: 0.5,
-  kind: 'low'
-},
-];
+
 ME.slotOcc = new Array(SLOTS.length).fill(null);
 const SPEED_MUL = [1, 0.62, 0.43, 0.29, 0.19, 0.12, 0.08, 0.05, 0.04];
 const MAX_ALIVE = 58; // 동료가 늘면 maxAlive()가 늘린다
 const RANGE = 7.6;
-const WAVES = [{
-  t0: 0,
-  t1: 14,
-  every: 1.3,
-  run: 0.12,
-  north: 0.68
-},
-{
-  t0: 14,
-  t1: 40,
-  every: 0.95,
-  run: 0.48,
-  north: 0.58
-},
-{
-  t0: 40,
-  t1: 85,
-  every: 0.78,
-  run: 0.65,
-  north: 0.48
-},
-{
-  t0: 85,
-  t1: 130,
-  every: 0.66,
-  run: 0.76,
-  north: 0.40
-},
-];
+
 // 사방에서 한꺼번에 둘러싸는 물결 (시각, 인원). 그 뒤로는 12초마다 점점 크게
 const RINGS = [
   [14, 18],
@@ -6238,10 +5014,7 @@ function crowdSim(dt) {
   const n = live.length;
   for (let a = 0; a < n; a++) {
     const p = live[a];
-    if (p.state === 'poster') {
-      tearTick(p, dt, Math.hypot(p.x - ME.x, p.z - ME.z));
-      continue;
-    }
+    if (p.state === 'poster') continue;
     // 친구 알림을 구경하는 1초: 걷던 사람만 멈추며, 붙잡은 몸은 계속 숙주를 따른다.
     if (p.socialFriend && socialCrowdActive(p) && p.state !== 'cling') {
       p.vx = p.vz = p.spd = 0;
@@ -6348,7 +5121,6 @@ function crowdSim(dt) {
       if (d < 1.2 && G.state === 'play') tryCling(p, H);
       const dm = H === ME ? d : Math.hypot(ME.x - p.x, ME.z - p.z);
       speechTick(p, dt, dm);
-      tearTick(p, dt, dm);
       continue;
     }
     if (p.state === 'cling') {
@@ -6386,8 +5158,8 @@ function crowdSim(dt) {
         // 멀리서 쓰러지는 소리는 생략 (소리 엔진 부담)
         if (!p.quiet && Math.hypot(p.x - ME.x, p.z - ME.z) < 12) {
           const pan = screenPan(p.x, p.z);
-          sfxFall(0.8, pan);
-          if (Math.random() < 0.4) sfxSplat(0.6, pan);
+          sfx.fall(0.8, pan);
+          if (Math.random() < 0.4) sfx.splat(0.6, pan);
         }
         p.poolPending = p.quiet ? -1 : 0.05;
       }
@@ -6453,12 +5225,12 @@ function tryCling(p, H) {
   if (p.bubble) fadeBubble(p.bubble);
   p.speakCD = rand(0.6, 1.6);
   if (H === ME) {
-    sfxGrab(screenPan(p.x, p.z));
+    sfx.grab(screenPan(p.x, p.z));
     CAM.shake = Math.max(CAM.shake, 0.05);
     if (!G.stabbedOnce) $('weapon').classList.add('pulse');
   } else {
     const dm = Math.hypot(ME.x - p.x, ME.z - p.z);
-    if (dm < 12) sfxGrab(screenPan(p.x, p.z), THREE.MathUtils.clamp(1.1 - dm * 0.08, 0.2, 0.7));
+    if (dm < 12) sfx.grab(screenPan(p.x, p.z), THREE.MathUtils.clamp(1.1 - dm * 0.08, 0.2, 0.7));
   }
 }
 
@@ -6485,7 +5257,7 @@ function speechTick(p, dt, d) {
   const vol = cling && mine ? 0.5 : THREE.MathUtils.clamp(1.2 - d * 0.075, 0.28, 1) * (cling ? 0.7 : 1);
   const pan = screenPan(p.x, p.z);
   const key = cling ? p.voiceKey.replace(/^g_/, 'f_') : p.voiceKey;
-  const h = playVoice(VO[key] ? key : p.voiceKey, {
+  const h = audio.playVoice(audio.voices[key] ? key : p.voiceKey, {
     rate: p.vrate * (cling ? 0.96 : 1),
     gain: vol,
     pan,
@@ -6499,20 +5271,6 @@ function speechTick(p, dt, d) {
     p.bubble.dur = h.dur;
   }
   p.socialPlea = false;
-}
-
-function tearTick(p, dt, d) {
-  if (d > 16 || socialQuiet(p)) return;
-  p.tearT -= dt;
-  if (p.tearT > 0) return;
-  p.tearT = rand(0.25, 0.55);
-  p.eyeFlip ^= 1;
-  // 눈 바깥쪽 볼을 타고 옆으로 떨어짐
-  const cx = Math.cos(p.yaw) * 0.6,
-    cz = -Math.sin(p.yaw) * 0.6,
-    s = p.eyeFlip ? -1 : 1;
-  if (p.eyeFlip) addTear(p.e1x, p.e1y, p.e1z, s * cx + p.vx * 0.9, s * cz + p.vz * 0.9, p);
-  else addTear(p.e2x, p.e2y, p.e2z, s * cx + p.vx * 0.9, s * cz + p.vz * 0.9, p);
 }
 
 // 외로운 사람들은 서로를 잠깐 살핀 뒤 동시에 외면하고, 건강한 사람에게 다시 운다.
@@ -6529,20 +5287,11 @@ function hushSocialPerson(p) {
   p.vo = null;
   if (p.bubble) removeBubble(p.bubble);
   setFace(p, 4);
-  for (let i = 0; i < TEAR_MAX; i++) {
-    const d = tearS[i];
-    if (d.on && d.owner === p) {
-      d.on = false;
-      tears.setMatrixAt(i, _zeroM);
-    }
-  }
-  tears.instanceMatrix.needsUpdate = true;
 }
 
 function resumeSocialPerson(p, plea) {
   if (!socialCrowdActive(p)) return;
   setFace(p, p.state === 'cling' ? 2 : 0);
-  p.tearT = 0;
   p.speakCD = plea ? rand(0.02, 0.15) : rand(0.18, 0.7);
   p.socialReturn = 0.65;
   p.socialPlea = plea;
@@ -6873,11 +5622,7 @@ function placeIdleCrowd(n = 16) {
     const nIn = pts.filter((q) => q.vis).length;
     if (vis && nIn >= wantIn) continue;
     if (!vis && pts.length - nIn >= n - wantIn) continue;
-    pts.push({
-      x,
-      z,
-      vis
-    });
+    pts.push({ x, z, vis });
   }
   camera.position.copy(save.p);
   camera.quaternion.copy(save.q);
@@ -6900,11 +5645,9 @@ function placeIdleCrowd(n = 16) {
 
 // ───────────────────────── 주인공 ─────────────────────────
 function meSim(dt) {
-  let ix = G.input.x,
-    iz = G.input.z;
+  let ix = G.input.x, iz = G.input.z;
   const m = Math.min(1, Math.hypot(ix, iz));
-  let dx = 0,
-    dz = 0;
+  let dx = 0, dz = 0;
   if (m > 0.02) {
     dx = ix / Math.hypot(ix, iz);
     dz = iz / Math.hypot(ix, iz);
@@ -6999,12 +5742,9 @@ function meAnimate(dt) {
   }
   const o = ME.tgt;
   o.fill(0);
-  const w = ME.walk,
-    v = Math.hypot(ME.vx, ME.vz);
-  const s = Math.sin(ME.phase),
-    c = Math.cos(ME.phase);
-  const mx = v > 0.05 ? ME.vx / v : 0,
-    mz = v > 0.05 ? ME.vz / v : 0;
+  const w = ME.walk, v = Math.hypot(ME.vx, ME.vz);
+  const s = Math.sin(ME.phase), c = Math.cos(ME.phase);
+  const mx = v > 0.05 ? ME.vx / v : 0, mz = v > 0.05 ? ME.vz / v : 0;
   const amp = 0.55 * w;
   o[P.HY] = M.HIP_Y - Math.abs(c) * 0.03 * w + Math.sin(G.t * 2.1) * 0.004;
   o[P.LHX] = -s * amp * mz;
@@ -7041,8 +5781,7 @@ function meAnimate(dt) {
       const f = ME.five;
       aimArm(h, f.pt, f.blend, 0, -0.25);
     } else if (stabbing) {
-      const st = ME.stab,
-        k = THREE.MathUtils.clamp(st.t / 0.2, 0, 1);
+      const st = ME.stab, k = THREE.MathUtils.clamp(st.t / 0.2, 0, 1);
       const ext = Math.sin(Math.min(1, k * 1.6) * Math.PI * 0.5);
       const back = 1 - Math.sin(k * Math.PI);
       const tp = st.target;
@@ -7058,9 +5797,7 @@ function meAnimate(dt) {
     }
   }
   MR.root.updateMatrixWorld(true);
-  for (const h of [0, 1]) {
-    ME.muzzle[h].copy(MUZZLE_LOCAL).applyMatrix4(GUNS[h].matrixWorld);
-  }
+  for (const h of [0, 1]) ME.muzzle[h].copy(MUZZLE_LOCAL).applyMatrix4(GUNS[h].matrixWorld);
   if (SG.on) SG.muzzleW.copy(SG_MUZZLE).applyMatrix4(SG.model.matrixWorld);
   meSparkles(dt);
 }
@@ -7096,9 +5833,7 @@ function findTarget() {
   for (const p of live) {
     if (!shootable(p)) continue;
     if (HOUSE.on) {
-      const dx = p.x - ME.x,
-        dz = p.z - ME.z,
-        d = Math.hypot(dx, dz) || 1;
+      const dx = p.x - ME.x, dz = p.z - ME.z, d = Math.hypot(dx, dz) || 1;
       if (houseRayT(ME.x, ME.z, dx / d, dz / d) < d) continue;
     } // 집 뒤에 가린 사람은 안 겨눔
     // 화면에 보이는 사람만 겨눈다
@@ -7123,36 +5858,13 @@ function rayHits(ox, oz, dx, dz, maxT) {
     if (t < 0.1 || t > maxT) continue;
     const px = rx - dx * t,
       pz = rz - dz * t;
-    if (px * px + pz * pz < 0.36 * 0.36) out.push({
-      p,
-      t
-    });
+    if (px * px + pz * pz < 0.36 * 0.36) out.push({ p, t });
   }
   out.sort((a, b) => a.t - b.t);
   return out;
 }
 // 필드 아이템: 같은 것은 지속시간만 갱신하고, 서로 다른 것은 함께 쓴다.
-const ITEM_DEFS = [{
-  key: 'pierce',
-  name: '관통탄',
-  short: '관통',
-  color: '#168d9b'
-},
-{
-  key: 'impact',
-  name: '충격탄',
-  short: '파괴',
-  color: '#d56b24'
-},
-{
-  key: 'spread',
-  name: '산탄',
-  short: '산탄',
-  color: '#8660be'
-},
-];
-const ITEM_DURATION = 10,
-  ITEM_MAX = 3;
+const ITEM_DURATION = 10, ITEM_MAX = 3;
 const POWERS = {
   pierce: 0,
   impact: 0,
@@ -7199,10 +5911,8 @@ function makeItemTex(def, existing) {
   } else if (def.key === 'impact') {
     g.beginPath();
     for (let i = 0; i < 16; i++) {
-      const a = -Math.PI / 2 + i * Math.PI / 8,
-        r = i % 2 ? 19 : 42;
-      const x = 96 + Math.cos(a) * r,
-        y = 85 + Math.sin(a) * r;
+      const a = -Math.PI / 2 + i * Math.PI / 8, r = i % 2 ? 19 : 42;
+      const x = 96 + Math.cos(a) * r, y = 85 + Math.sin(a) * r;
       if (i) g.lineTo(x, y);
       else g.moveTo(x, y);
     }
@@ -7242,9 +5952,7 @@ if (document.fonts && document.fonts.load) {
 }
 const itemRingGeo = new THREE.RingGeometry(.34, .43, 28);
 itemRingGeo.rotateX(-Math.PI / 2);
-const FIELD_ITEMS = Array.from({
-  length: ITEM_MAX
-}, () => {
+const FIELD_ITEMS = Array.from({ length: ITEM_MAX }, () => {
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({
     map: ITEM_TEXTURES[0],
     transparent: true,
@@ -7263,21 +5971,11 @@ const FIELD_ITEMS = Array.from({
   }));
   ring.visible = false;
   scene.add(ring);
-  return {
-    on: false,
-    kind: 0,
-    x: 0,
-    z: 0,
-    age: 0,
-    sp,
-    ring
-  };
+  return { on: false, kind: 0, x: 0, z: 0, age: 0, sp, ring };
 });
 const impactRingGeo = new THREE.RingGeometry(.88, 1, 40);
 impactRingGeo.rotateX(-Math.PI / 2);
-const IMPACT_PULSES = Array.from({
-  length: 4
-}, () => {
+const IMPACT_PULSES = Array.from({ length: 4 }, () => {
   const m = new THREE.Mesh(impactRingGeo, new THREE.MeshBasicMaterial({
     color: '#f0a03b',
     transparent: true,
@@ -7286,10 +5984,7 @@ const IMPACT_PULSES = Array.from({
   }));
   m.visible = false;
   scene.add(m);
-  return {
-    m,
-    t: 0
-  };
+  return { m, t: 0 };
 });
 let impactPulseNext = 0;
 
@@ -7327,7 +6022,7 @@ function takePower(kind) {
   itemNoticeEl.textContent = `${def.name} · ${ITEM_DURATION}초`;
   itemNoticeEl.hidden = false;
   itemNoticeT = 1.35;
-  sfxItemPickup();
+  sfx.itemPickup();
   updateItemStatus();
   return true;
 }
@@ -7551,10 +6246,7 @@ function shoot(forced) {
     pierce = powered && POWERS.pierce > 0,
     impact = powered && POWERS.impact > 0,
     spread = powered && POWERS.spread > 0;
-  const splash = {
-    done: false
-  },
-    pan = THREE.MathUtils.clamp((mz.x - CAMX) / 5, -1, 1);
+  const splash = { done: false }, pan = THREE.MathUtils.clamp((mz.x - CAMX) / 5, -1, 1);
   // 중앙 탄환부터, 같은 상대는 한 번만. 각 탄환은 가까운 명중부터 처리한다.
   fireRay(mz, dx, dz, RANGE + 2, pierce, impact, splash, spread);
   if (spread) {
@@ -7567,7 +6259,7 @@ function shoot(forced) {
   FLASHES[h].t = 0.05;
   FLASHES[h].sp.material.rotation = rand(0, TAU);
   ejectShell(mz.x, mz.y, mz.z, dx, dz);
-  if (!GAME_MOD.silencer) sfxGun(pan);
+  if (!GAME_MOD.silencer) sfx.gun(pan);
   if (!GAME_MOD.noRecoil) CAM.shake = Math.max(CAM.shake, 0.035);
 }
 
@@ -7618,8 +6310,8 @@ function kill(p, dx, dz, how, by, quiet) {
   if (how === 'shot') bloodSpurt(p.x + dx * 0.15, hy, p.z + dz * 0.15, dx, 0.2, dz, 8);
   addDecal(p.x + dx * rand(0.4, 1.1), p.z + dz * rand(0.4, 1.1), rand(0.7, 1.2), 2, Math.atan2(dx, dz) - Math.PI / 2 + rand(-0.3, 0.3));
   const pan = screenPan(p.x, p.z);
-  if (bat) sfxBat(pan, vfar);
-  else sfxFlesh((how === 'stab' ? 1 : 0.85) * (by ? vfar : 1), pan);
+  if (bat) sfx.bat(pan, vfar);
+  else sfx.flesh((how === 'stab' ? 1 : 0.85) * (by ? vfar : 1), pan);
   if (by) {
     by.kills++;
     G.allyKills++;
@@ -7640,7 +6332,7 @@ function stab() {
     target: c,
     done: false
   };
-  sfxStab(hand === 0 ? 0.3 : -0.3);
+  sfx.stab(hand === 0 ? 0.3 : -0.3);
   if (!G.stabbedOnce) {
     G.stabbedOnce = true;
     $('weapon').classList.remove('pulse');
@@ -7734,9 +6426,9 @@ function shootShotgunOut(ax, ay, az) {
   if (!GAME_MOD.infiniteAmmo) SG.shells--;
   if (!GAME_MOD.auto) SG.cd = SG_CD;
   SG.pumpT = 0;
-  if (!GAME_MOD.silencer) sfxShotgunOut(THREE.MathUtils.clamp((mz.x - CAMX) / 5, -1, 1));
+  if (!GAME_MOD.silencer) sfx.shotgunOut(THREE.MathUtils.clamp((mz.x - CAMX) / 5, -1, 1));
   if (GAME_MOD.infiniteAmmo || SG.shells > 0) {
-    sfxPumpOut(0.16);
+    sfx.pumpOut(0.16);
     SG.ejectT = 0.2;
   } else {
     SG.dropT = 0.5;
@@ -7780,7 +6472,7 @@ function sgDiscard(quiet) {
   // 오른손 높이에서 떨어뜨리고, 그 손에는 다시 권총
   MR.wrR.getWorldPosition(_v2);
   sgDropAt(_v2.x, _v2.z, Math.max(0.25, _v2.y - 0.1));
-  if (!quiet) sfxGunDrop(screenPan(_v2.x, _v2.z), 0.28);
+  if (!quiet) sfx.gunDrop(screenPan(_v2.x, _v2.z), 0.28);
   weaponEl.classList.remove('sgon');
   sgBadge(false);
 }
@@ -7862,7 +6554,7 @@ function burstSim(dt) {
         target: c,
         done: true
       };
-      sfxStab(hand === 0 ? 0.3 : -0.3);
+      sfx.stab(hand === 0 ? 0.3 : -0.3);
       stabHit(c);
     }
   } else if (b.phase === 'guns') {
@@ -8057,27 +6749,6 @@ function screenPan(x, z) {
 // ───────────────────────── 동료: 정신건강 2급·3급 ─────────────────────────
 // 화살표만 말없이 나타난다. 가서 매달린 사람들을 떼어 주면, 다가와서 말없이 하이파이브.
 // 그 뒤로는 아무 말 없이 옆에서 같이 싸운다.
-const ALLY_DEFS = [{
-  shirt: '#8fdcbf',
-  hair: '#3b2a20',
-  bob: false
-}, // 2급
-{
-  shirt: '#c6b6f2',
-  hair: '#2a2024',
-  bob: true
-}, // 3급
-{
-  shirt: '#f7bccf',
-  hair: '#5a3a28',
-  bob: true
-}, // 2급
-{
-  shirt: '#f1da86',
-  hair: '#1d1a1c',
-  bob: false
-}, // 3급 (안경)
-];
 const ALLY_AT = [14, 38, 62, 86]; // 갇힌 동료가 나타나는 시각
 const ALLY_GAP = 10; // 앞 동료와 하이파이브한 뒤 최소 간격
 const ALLY_LAST = 116; // 이 뒤로는 새로 나타나지 않음
@@ -8101,20 +6772,7 @@ const GUARD_SETS = [
   [0, 2.2, -2.2],
   [-0.75, 0.75, 2.4, -2.4]
 ];
-const GUARD_PERMS = [
-  [
-    []
-  ],
-  [
-    [0]
-  ],
-  [
-    [0, 1],
-    [1, 0]
-  ],
-  [],
-  []
-];
+const GUARD_PERMS = [[[]], [[0]], [[0, 1], [1, 0]], [], []];
 (function perms() {
   const go = (n, cur, out) => {
     if (cur.length === n) {
@@ -8295,10 +6953,7 @@ function makeAlly(k) {
   };
 }
 const ALLIES = [0, 1, 2, 3].map(makeAlly);
-ALLIES.forEach((a) => setAllyColors(a.k, {
-  shirt: a.def.shirt,
-  hair: a.def.hair
-}));
+ALLIES.forEach((a) => setAllyColors(a.k, { shirt: a.def.shirt, hair: a.def.hair }));
 // 눈 반짝이: 2급은 작게 두 개, 3급은 더 작게 한 개
 const ALLY_SPARKS = ALLIES.map((a) => {
   const arr = [];
@@ -8413,21 +7068,10 @@ function onAllyFreed(a) {
 function startFive(a, side) {
   a.state = 'five';
   // 카메라 쪽 손으로 (오른편에 서면 왼손, 왼편에 서면 오른손)
-  a.five = {
-    t: 0,
-    side,
-    hand: side > 0 ? 'L' : 'R',
-    contact: false,
-    k: 0
-  };
+  a.five = { t: 0, side, hand: side > 0 ? 'L' : 'R', contact: false, k: 0 };
   if (a.five.hand === 'L') a.hideKnife = true;
   else a.hideBat = true;
-  ME.five = {
-    h: side > 0 ? 0 : 1,
-    pt: new THREE.Vector3(),
-    blend: 0,
-    ally: a
-  };
+  ME.five = { h: side > 0 ? 0 : 1, pt: new THREE.Vector3(), blend: 0, ally: a };
   a.vx = a.vz = 0;
   a.swing = null;
   a.stab = null;
@@ -8447,7 +7091,7 @@ function fiveSim(a, dt) {
   m.blend = f.k = THREE.MathUtils.clamp(k, 0, 1);
   if (!f.contact && f.t >= 0.26) {
     f.contact = true;
-    sfxClap();
+    sfx.clap();
     popBurst(m.pt.x, m.pt.y + 0.04, m.pt.z, 0.72);
     CAM.shake = Math.max(CAM.shake, 0.06);
     showToast();
@@ -8470,12 +7114,8 @@ function allyTargetOk(t) {
 }
 
 function startSwing(a, t) {
-  a.swing = {
-    t: 0,
-    hit: false,
-    dir: Math.atan2(t.x - a.x, t.z - a.z)
-  };
-  sfxSwing(screenPan(a.x, a.z), allyVol(a));
+  a.swing = { t: 0, hit: false, dir: Math.atan2(t.x - a.x, t.z - a.z) };
+  sfx.swing(screenPan(a.x, a.z), allyVol(a));
 }
 
 function allySwingHit(a) {
@@ -8492,18 +7132,12 @@ function allySwingHit(a) {
       d = Math.hypot(dx, dz);
     if (d > 1.5 || d < 0.05) continue;
     if ((dx * fx + dz * fz) / d < 0.3) continue;
-    hits.push({
-      p,
-      d
-    });
+    hits.push({ p, d });
   }
   hits.sort((u, v) => u.d - v.d);
   const n = hits.length > 1 && hits[1].d < 1.25 && Math.random() < 0.25 ? 2 : Math.min(1, hits.length);
   for (let i = 0; i < n; i++) {
-    const {
-      p,
-      d
-    } = hits[i];
+    const { p, d } = hits[i];
     let kx = (p.x - a.x) / d * 0.75 + lx * 0.65,
       kz = (p.z - a.z) / d * 0.75 + lz * 0.65;
     const kl = Math.hypot(kx, kz) || 1;
@@ -8516,12 +7150,8 @@ function allySwingHit(a) {
 
 function allyKnife(a) {
   if (a.stab || a.cd > 0 || !a.clingers.length) return;
-  a.stab = {
-    t: 0,
-    target: a.clingers[0],
-    done: false
-  };
-  sfxStab(screenPan(a.x, a.z), allyVol(a) * 0.8);
+  a.stab = { t: 0, target: a.clingers[0], done: false };
+  sfx.stab(screenPan(a.x, a.z), allyVol(a) * 0.8);
 }
 
 function allyStabHit(a, c) {
@@ -8606,9 +7236,8 @@ function allySim(dt) {
     } else if (a.state === 'freed') {
       if (a.pinned) {
         a.target = null;
-        allyKnife(a);
-      } // 붙잡혀도 버둥대며 한 명씩 떼어 낸다
-      else if (a.clingers.length) allyKnife(a);
+        allyKnife(a); // 붙잡혀도 버둥대며 한 명씩 떼어 낸다
+      } else if (a.clingers.length) allyKnife(a);
       else if (!a.stab) {
         const side = a.x >= ME.x ? 1 : -1;
         tx = ME.x + side * 0.78;
@@ -8669,7 +7298,7 @@ function allySim(dt) {
           if (Math.hypot(hc.x - a.x, hc.z - a.z) < 0.78) {
             a.stab = { t: 0, target: hc, done: false };
             a.helpCD = GUARD_HELP_CD;
-            sfxStab(screenPan(a.x, a.z), allyVol(a) * 0.8);
+            sfx.stab(screenPan(a.x, a.z), allyVol(a) * 0.8);
           }
         } else {
           tx = px;
@@ -8995,19 +7624,7 @@ function makeBubble(owner, text, voice, cls = '', fixedDur = 0) {
   el.className = 'bubble ' + cls;
   wrap.appendChild(el);
   bubbleLayer.appendChild(wrap);
-  const b = {
-    owner,
-    text,
-    voice,
-    wrap,
-    el,
-    t: 0,
-    dur: voice ? voice.dur : fixedDur,
-    shown: 0,
-    plea: cls === 'plea',
-    ending: false,
-    et: 0
-  };
+  const b = { owner, text, voice, wrap, el, t: 0, dur: voice ? voice.dur : fixedDur, shown: 0, plea: cls === 'plea', ending: false, et: 0 };
   bubbles.add(b);
   return b;
 }
@@ -9117,7 +7734,7 @@ function showToast() {
   toastEl.classList.remove('show');
   void toastEl.offsetWidth;
   toastEl.classList.add('show');
-  sfxChime();
+  sfx.chime();
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
     toastEl.hidden = true;
@@ -9160,7 +7777,7 @@ function dangerFx(dt) {
     heartT -= dt;
     if (heartT <= 0) {
       heartT = THREE.MathUtils.lerp(0.8, 0.38, k);
-      sfxHeart(0.45 + 0.55 * k);
+      sfx.heart(0.45 + 0.55 * k);
     }
   } else heartT = 0;
 }
@@ -9206,7 +7823,7 @@ function startOutburst() {
   runSeq([
     [0.8, () => {
       bigSparkle();
-      sfxSparkle(1);
+      sfx.sparkle(1);
     }],
     [1.25, () => {
       G.burst.phase = 'knife';
@@ -9232,11 +7849,11 @@ const _as = {
   y: 0,
   z: 0
 },
- _as2 = {
-   x: 0,
-   y: 0,
-   z: 0
- };
+  _as2 = {
+    x: 0,
+    y: 0,
+    z: 0
+  };
 
 function updateArrow() {
   const pinned = ALLIES.filter((a) => a.rescued && a.pinned && a.clingers.length > 1 && a.pinT > 2.6);
@@ -10074,7 +8691,7 @@ function updateTypers(dt) {
       ty.t -= ty.speed;
       ty.i++;
       ty.chars[ty.i - 1].style.visibility = 'visible';
-      if (ty.text[ty.i - 1] !== ' ') sfxType();
+      if (ty.text[ty.i - 1] !== ' ') sfx.type();
     }
     placeTypeCaret(ty);
     if (ty.i >= ty.text.length && ty.t > 0.6) {
@@ -10166,7 +8783,7 @@ function hideAllOverlays() {
 }
 
 function startIntro() {
-  audioInit();
+  audio.init();
   document.body.classList.add('intro-stage');
   resetWorld();
   hideAllOverlays();
@@ -10200,13 +8817,10 @@ function startIntro() {
     }],
     [10.8, () => {
       bigSparkle();
-      sfxSparkle(1);
+      sfx.sparkle(1);
     }],
     [11.3, () => {
-      playVoice('p_line', {
-        gain: 1.0,
-        verb: 0.12
-      });
+      audio.playVoice('p_line', { gain: 1.0, verb: 0.12 });
       showSub('나는 정신건강 0급이다.');
     }],
     [13.3, () => {
@@ -10231,18 +8845,14 @@ function noticeSteps(t0) {
       if (!first) return;
       first.look = 1;
       const key = pick(N_KEYS);
-      const h = playVoice(key, {
-        gain: 1.0,
-        sob: 0.01,
-        pan: screenPan(first.x, first.z)
-      });
+      const h = audio.playVoice(key, { gain: 1.0, sob: 0.01, pan: screenPan(first.x, first.z) });
       first.vo = h;
       first.bubble = makeBubble(first, '정신건강한 사람이다…!', h, 'big', 1.3);
       setFace(first, 1);
       G.firstNotice = first;
     }],
     [t0 + 1.0, () => {
-      live.filter((p) => p.state === 'idle').forEach((p, k) => p.lookDelay = k * 0.07 );
+      live.filter((p) => p.state === 'idle').forEach((p, k) => p.lookDelay = k * 0.07);
       if (G.firstNotice) setFace(G.firstNotice, 0);
     }],
     [t0 + 1.5, () => {
@@ -10255,7 +8865,7 @@ function noticeSteps(t0) {
       ]));
     }],
     [t0 + 1.55, () => {
-      if (ok()) sfxRiser(ac.currentTime, SPB * 4);
+      if (ok()) sfx.riser(audio.ctx.currentTime, SPB * 4);
     }],
     [t0 + 1.55 + SPB * 4, () => drop()],
   ];
@@ -10279,7 +8889,7 @@ function stampIt(stampId, certId) {
   void st.offsetWidth;
   st.classList.add('hit');
   setTimeout(() => {
-    sfxStamp();
+    sfx.stamp();
     const c = $(certId).querySelector('.cert');
     c.classList.remove('shake');
     void c.offsetWidth;
@@ -10295,9 +8905,9 @@ function drop() {
   G.state = 'play';
   G.ctrl = true;
   G.playT = 0;
-  const t = ok() ? ac.currentTime + 0.03 : 0;
+  const t = ok() ? audio.ctx.currentTime + 0.03 : 0;
   if (ok()) {
-    sfxImpact(t);
+    sfx.impact(t);
     musicStart(t, 32);
   }
   const slam = $('slam');
@@ -10379,13 +8989,10 @@ function startEnding() {
     [0.7, () => setCam('end', 2.4)],
     [2.9, () => {
       bigSparkle();
-      sfxSparkle(1);
+      sfx.sparkle(1);
     }],
     [3.4, () => {
-      playVoice('p_no', {
-        gain: 1.0,
-        verb: 0.12
-      });
+      audio.playVoice('p_no', { gain: 1.0, verb: 0.12 });
       const b = makeBubble(ME, '싫어.', null, 'big refusal', 1.5);
       b.instant = true;
     }],
@@ -10437,7 +9044,7 @@ function updateResult(dt) {
       b.textContent = v;
       if (RES.tickT <= 0 && v > 0 && k < 1) {
         RES.tickT = 0.045;
-        sfxType();
+        sfx.type();
       }
     }
     if (k >= 1) {
@@ -10447,7 +9054,7 @@ function updateResult(dt) {
       b.classList.remove('pop');
       void b.offsetWidth;
       b.classList.add('pop');
-      sfxStamp();
+      sfx.stamp();
     }
   } else if (G.state !== 'end' && RES.t - RES.btnT > 0.45) {
     $('again').classList.add('show');
@@ -10456,7 +9063,7 @@ function updateResult(dt) {
 }
 
 function restart() {
-  audioInit();
+  audio.init();
   document.body.classList.add('intro-stage');
   resetWorld();
   hideAllOverlays();
@@ -10472,7 +9079,7 @@ $('start').addEventListener('click', () => {
   if (G.state === 'title') startIntro();
 });
 $('mute').addEventListener('click', () => {
-  audioInit();
+  audio.init();
   setMuted(!MUTED);
 });
 setMuted(MUTED);
@@ -10651,11 +9258,7 @@ function goInside() {
     face: faceBloodN,
     shirt: shirtBloodN,
   };
-  const hash = Link.write({
-    dir: 'in',
-    kills: G.kills,
-    main
-  });
+  const hash = Link.write({ dir: 'in', kills: G.kills, main });
   stopAllVoices();
   musicStop(true);
   G.paused = true;
@@ -10763,7 +9366,7 @@ function setupReturn(L) {
 
 function resumeFromHouse() {
   if (G.state !== 'back') return;
-  audioInit();
+  audio.init();
   G.state = 'play';
   G.ctrl = true;
   G.freeze = false;
@@ -10785,21 +9388,21 @@ function resumeFromHouse() {
   const kick = () => {
     if (kicked || !ok()) return;
     kicked = true;
-    const t = ac.currentTime + 0.03;
-    sfxDoorSlamOut();
-    sfxImpact(t);
+    const t = audio.ctx.currentTime + 0.03;
+    sfx.doorSlamOut();
+    sfx.impact(t);
     musicStart(t, 32);
   };
   if (ok()) kick();
-  else if (ac) {
+  else if (audio.ctx) {
     const onState = () => {
       if (!ok()) return;
-      ac.removeEventListener('statechange', onState);
+      audio.ctx.removeEventListener('statechange', onState);
       if (G.state === 'play') kick();
     };
-    ac.addEventListener('statechange', onState);
+    audio.ctx.addEventListener('statechange', onState);
     try {
-      const pr = ac.resume();
+      const pr = audio.ctx.resume();
       if (pr && pr.catch) pr.catch(() => { });
     } catch { }
   }
@@ -10899,7 +9502,7 @@ function frame(now) {
   updateBubbles(dt);
   updateArrow();
   renderer.render(scene, camera);
-  audioWatch(dt);
+  audio.update(dt);
   // 느린 기기는 단계적으로 가볍게: 해상도 → 군중 그림자 → 해상도 → 시체 윤곽선
   frameAvg = THREE.MathUtils.lerp(frameAvg, dt * 1000, 0.05);
   perfT += dt;
@@ -10933,22 +9536,8 @@ function setPR(v) {
 }
 
 function lowerQuality() {
-  while (qStep < QSTEPS.length) {
-    if (QSTEPS[qStep++]()) return;
-  }
+  while (qStep < QSTEPS.length) if (QSTEPS[qStep++]()) return;
 }
-// 소리가 멈춰 있으면 화면을 만질 때마다 다시 켬
-for (const ev of ['pointerdown', 'keydown', 'touchend']) window.addEventListener(ev, () => audioPoke(), true);
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) {
-    G.paused = true;
-    if (ac && ac.state === 'running') ac.suspend();
-  } else {
-    G.paused = false;
-    lastNow = performance.now();
-    if (ac && G.state !== 'title') ac.resume();
-  }
-});
 
 // 시작 준비: 글꼴을 기다렸다가 버튼 활성화
 function ready() {
