@@ -1,11 +1,13 @@
 import * as THREE from 'three';
-import VOICE_DATA from './voice-data.js';
-import Linker from './links.js';
-import { $, clamp, lerp, rand, pick, TAU, approach, wrapAngle, Store } from './utils.js';
+import VOICE_DATA from './data/voices.js';
+import { CROWD_COLORS } from './data/data.js';
+import Linker from './utils/Linker.js';
+import Store from './utils/Store.js';
+import { $, rand, pick, TAU, approach, wrapAngle } from './utils.js';
 import { easeOutCubic, easeInQuad, easeInOutSine } from './eases.js'
 
 // ───────────────────────── 기본 도구 ─────────────────────────
-const store = new Store();
+const store = new Store("friendhazard");
 // 처음엔 주 입력장치로 짐작하고, 실제로 손가락·마우스가 들어오면 그쪽으로 바꾼다
 let IS_TOUCH = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
 document.body.classList.toggle('touch', IS_TOUCH);
@@ -21,7 +23,6 @@ function goMainTitle() {
 
 // ───────────────────────── 렌더러 / 장면 ─────────────────────────
 const canvas = $('c');
-THREE.ColorManagement.enabled = false;
 const renderer = new THREE.WebGLRenderer({ canvas });
 const PR_MAX = Math.min(window.devicePixelRatio || 1, 2);
 let PR = PR_MAX;
@@ -68,7 +69,7 @@ window.addEventListener('resize', onResize);
 // 느린 휴대폰: 해상도를 조금씩 낮춘다
 const PERF = { ema: 16, slowT: 0, fastT: 0 };
 function perfTick(rawDt) {
-  PERF.ema = lerp(PERF.ema, rawDt * 1000, 0.05);
+  PERF.ema = THREE.MathUtils.lerp(PERF.ema, rawDt * 1000, 0.05);
   if (PERF.ema > 26) { PERF.slowT += rawDt; PERF.fastT = 0; } else if (PERF.ema < 14) { PERF.fastT += rawDt; PERF.slowT = 0; } else { PERF.slowT = Math.max(0, PERF.slowT - rawDt); PERF.fastT = 0; }
   if (PERF.slowT > 2.5 && PR > 1) { PR = Math.max(1, PR - 0.25); PERF.slowT = 0; onResize(); }
   if (PERF.fastT > 6 && PR < PR_MAX) { PR = Math.min(PR_MAX, PR + 0.25); PERF.fastT = 0; onResize(); }
@@ -82,7 +83,7 @@ const _col = new THREE.Color();
 // ───────────────────────── 소리 ─────────────────────────
 let ac = null;
 const A = {};
-let MUTED = !!store.get('fh_muted', false);
+let MUTED = !!store.get('muted', false);
 const VO = {};
 const activeVoices = new Set();
 
@@ -108,7 +109,7 @@ function audioInit() {
   if (ac.state === 'suspended') ac.resume();
 }
 function setMuted(m) {
-  MUTED = m; store.set('fh_muted', m);
+  MUTED = m; store.set('muted', m);
   $('mute').classList.toggle('muted', m);
   $('mute').setAttribute('aria-label', m ? '소리 켜기' : '소리 끄기');
   if (ac) { const t = ac.currentTime; A.master.gain.cancelScheduledValues(t); A.master.gain.setTargetAtTime(m ? 0 : 0.95, t, 0.03); }
@@ -133,7 +134,10 @@ function makeIR(sec, decay) {
 }
 function makeCurve(k) {
   const n = 1024, c = new Float32Array(n);
-  for (let i = 0; i < n; i++) { const x = i / (n - 1) * 2 - 1; c[i] = Math.tanh(x * k) / Math.tanh(k); }
+  for (let i = 0; i < n; i++) {
+    const x = i / (n - 1) * 2 - 1;
+    c[i] = Math.tanh(x * k) / Math.tanh(k);
+  }
   return c;
 }
 
@@ -145,9 +149,7 @@ async function decodeVoices() {
       if (!res.ok) throw new Error(res.status);
       const ab = await res.arrayBuffer();
       VO[k] = await ac.decodeAudioData(ab);
-    } catch (e) {
-      console.warn('Failed to load voice:', k, data[k].b, e);
-    }
+    } catch (e) { console.warn('Failed to load voice:', k, data[k].b, e); }
   }));
 }
 
@@ -165,7 +167,12 @@ function outChain(vol, pan, verb, lp) {
   const g = gainN(vol);
   let head = g, tail = g;
   if (lp) { const f = filt('lowpass', lp, 0.7); f.connect(g); head = f; }
-  if (pan && Math.abs(pan) > 0.04 && ac.createStereoPanner) { const p = ac.createStereoPanner(); p.pan.value = clamp(pan, -1, 1); g.connect(p); tail = p; }
+  if (pan && Math.abs(pan) > 0.04 && ac.createStereoPanner) {
+    const p = ac.createStereoPanner();
+    p.pan.value = THREE.MathUtils.clamp(pan, -1, 1);
+    g.connect(p);
+    tail = p;
+  }
   tail.connect(A.sfx);
   if (verb && verb > 0.05) { const s = gainN(verb); g.connect(s); s.connect(A.verb); }
   return head;
@@ -450,7 +457,7 @@ function dragAssign(items, dt = 1 / 60) {
     const wob = 0.66 + 0.34 * Math.sin(v.ph * 2.3) * Math.sin(v.ph * 0.71 + 1.3);
     v.g.gain.setTargetAtTime(v.lv * 0.62 * wob, t, 0.045);
     v.lp.frequency.setTargetAtTime(v.occl ? 650 : 2600, t, 0.12);
-    if (v.pn) v.pn.pan.setTargetAtTime(clamp(v.pan, -1, 1), t, 0.05);
+    if (v.pn) v.pn.pan.setTargetAtTime(THREE.MathUtils.clamp(v.pan, -1, 1), t, 0.05);
     v.sqT -= dt;
     if (v.sqT <= 0) {
       v.sqT = rand(0.5, 1.8);
@@ -538,7 +545,7 @@ function sfxCreak(t, dur, v = 1, f0 = 150) {
   let fr = f0, stick = 0;
   for (let i = 0; i < N; i++) {
     const k = i / (N - 1);
-    fr += rand(-14, 14); fr = clamp(fr, f0 * 0.7, f0 * 1.6);
+    fr += rand(-14, 14); fr = THREE.MathUtils.clamp(fr, f0 * 0.7, f0 * 1.6);
     stick = Math.random() < 0.18 ? rand(0.2, 1) : stick * 0.8;
     fc[i] = fr * (1 + 0.35 * Math.sin(k * 9.0));
     gc[i] = Math.max(0.0001, (0.25 + 0.75 * stick) * Math.sin(Math.PI * Math.min(1, k * 1.08)) * (k < 0.04 ? k / 0.04 : 1));
@@ -662,7 +669,7 @@ function playVoice(key, o = {}) {
   if (o.lp) { const f = filt('lowpass', o.lp, 0.7); node.connect(f); node = f; }
   node.connect(g);
   let tail = g;
-  if (ac.createStereoPanner) { const p = ac.createStereoPanner(); p.pan.value = clamp(o.pan || 0, -1, 1); g.connect(p); tail = p; }
+  if (ac.createStereoPanner) { const p = ac.createStereoPanner(); p.pan.value = THREE.MathUtils.clamp(o.pan || 0, -1, 1); g.connect(p); tail = p; }
   tail.connect(A.voice);
   const vs = gainN(o.verb === undefined ? 0.3 : o.verb); g.connect(vs); vs.connect(A.verb);
   const t0 = ac.currentTime + (o.delay || 0);
@@ -672,8 +679,8 @@ function playVoice(key, o = {}) {
     stop(fast = 0.012) {
       if (h.stopped) return; h.stopped = true;
       const t = ac.currentTime;
-      try { g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(g.gain.value, t); g.gain.linearRampToValueAtTime(0, t + fast); src.stop(t + fast + 0.01); } catch (e) { /* 이미 끝남 */ }
-      try { if (lfo) lfo.stop(t + fast + 0.02); if (lfo2) lfo2.stop(t + fast + 0.02); } catch (e) { /* 이미 끝남 */ }
+      try { g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(g.gain.value, t); g.gain.linearRampToValueAtTime(0, t + fast); src.stop(t + fast + 0.01); } catch { }
+      try { if (lfo) lfo.stop(t + fast + 0.02); if (lfo2) lfo2.stop(t + fast + 0.02); } catch { }
     },
   };
   src.onended = () => { h.stopped = true; activeVoices.delete(h); try { if (lfo) lfo.stop(); if (lfo2) lfo2.stop(); } catch { } };
@@ -705,7 +712,7 @@ function tileNoise(n, cells, seed) {
     const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty);
     const at = (i, j) => g[((j % cells) * cells + (i % cells))];
     const a = at(x0, y0), b = at(x0 + 1, y0), c = at(x0, y0 + 1), d = at(x0 + 1, y0 + 1);
-    out[y * n + x] = lerp(lerp(a, b, sx), lerp(c, d, sx), sy);
+    out[y * n + x] = THREE.MathUtils.lerp(THREE.MathUtils.lerp(a, b, sx), THREE.MathUtils.lerp(c, d, sx), sy);
   }
   return out;
 }
@@ -911,7 +918,7 @@ function makeGlowTex() {
 function makeDirtTex() {
   const N = 256, c = cnv(N, N), g = c.getContext('2d');
   const a = tileNoise(N, 4, 3), b = tileNoise(N, 11, 7), img = g.createImageData(N, N);
-  for (let i = 0; i < N * N; i++) { const v = clamp(a[i] * 0.7 + b[i] * 0.3, 0, 1) * 255; img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = v; img.data[i * 4 + 3] = 255; }
+  for (let i = 0; i < N * N; i++) { const v = THREE.MathUtils.clamp(a[i] * 0.7 + b[i] * 0.3, 0, 1) * 255; img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = v; img.data[i * 4 + 3] = 255; }
   g.putImageData(img, 0, 0);
   return texOf(c, { repeat: true, srgb: false });
 }
@@ -1270,7 +1277,7 @@ function lfAtCPU(x, z) {
   const fx = (x - LF.x0) * LF.res - 0.5, fz = (z - LF.z0) * LF.res - 0.5;
   const i = Math.floor(fx), j = Math.floor(fz), tx = fx - i, tz = fz - j;
   const at = (a, b) => (a < 0 || b < 0 || a >= LF.nx || b >= LF.nz) ? 0 : LF.data[b * LF.nx + a] / 100;
-  return lerp(lerp(at(i, j), at(i + 1, j), tx), lerp(at(i, j + 1), at(i + 1, j + 1), tx), tz);
+  return THREE.MathUtils.lerp(THREE.MathUtils.lerp(at(i, j), at(i + 1, j), tx), THREE.MathUtils.lerp(at(i, j + 1), at(i + 1, j + 1), tx), tz);
 }
 
 // ── 형광등 ──
@@ -1306,11 +1313,11 @@ function fixTick(f, dt) {
       f.burst -= dt;
       I = (Math.sin(f.burst * 61 + f.x) > 0.1 ? 1 : 0.06) * f.base;
       if (f.burst <= 0) f.ft = f.mode === 'path' ? rand(2.5, 7) : rand(0.6, 3.2);
-    } else if (f.ft <= 0) { f.burst = rand(0.12, 0.55); if (f.near && f.near < 9) sfxFlick(clamp(1.1 - f.near * 0.1, 0.25, 1), f.pan || 0); }
+    } else if (f.ft <= 0) { f.burst = rand(0.12, 0.55); if (f.near && f.near < 9) sfxFlick(THREE.MathUtils.clamp(1.1 - f.near * 0.1, 0.25, 1), f.pan || 0); }
   } else if (f.mode === 'broken') {
     I = 0;
     if (f.burst > 0) { f.burst -= dt; I = Math.sin(f.burst * 70) > 0.4 ? f.base * 0.9 : 0; if (f.burst <= 0) f.ft = rand(3, 9); }
-    else if (f.ft <= 0) { f.burst = rand(0.08, 0.3); if (f.near && f.near < 9) sfxFlick(clamp(1 - f.near * 0.1, 0.2, 0.8), f.pan || 0); }
+    else if (f.ft <= 0) { f.burst = rand(0.08, 0.3); if (f.near && f.near < 9) sfxFlick(THREE.MathUtils.clamp(1 - f.near * 0.1, 0.2, 0.8), f.pan || 0); }
   } else if (f.mode === 'dying') {
     f.dieT -= dt;
     I = f.dieT > 0 ? (Math.sin(f.dieT * 47 + f.z) > -0.1 ? f.base : 0.05) : 0;
@@ -1741,7 +1748,7 @@ function buildGosiDoors() {
     // 복도 쪽 면이 로컬 +Z인지 -Z인지
     g.side2 = -(g.n[0] * -g.u[1] + g.n[1] * g.u[0]) >= 0 ? 1 : -1;
     leaves.add(_zeroM); handles.add(_zeroM);
-    const k = d.num ? clamp(+d.num - 301, 0, NUM_COLS * NUM_ROWS - 1) : 0;
+    const k = d.num ? THREE.MathUtils.clamp(+d.num - 301, 0, NUM_COLS * NUM_ROWS - 1) : 0;
     aNum.setXY(li, (k % NUM_COLS) / NUM_COLS, 1 - (Math.floor(k / NUM_COLS) + 1) / NUM_ROWS);
     if (!d.num) plates.setMatrixAt(li, _zeroM);
     g.hasPlate = !!d.num;
@@ -2198,7 +2205,7 @@ function collideCircle(p, r, yLo = 0.1, yHi = 1.6) {
       if (_hseen[idx] === _hstamp) continue; _hseen[idx] = _hstamp;
       const w = WALLS[idx];
       if (w.off || w.y1 < yLo || w.y0 > yHi) continue;
-      const cx = clamp(p.x, w.x0, w.x1), cz = clamp(p.z, w.z0, w.z1);
+      const cx = THREE.MathUtils.clamp(p.x, w.x0, w.x1), cz = THREE.MathUtils.clamp(p.z, w.z0, w.z1);
       let dx = p.x - cx, dz = p.z - cz, d2 = dx * dx + dz * dz;
       if (d2 >= r * r) continue;
       if (d2 < 1e-10) {
@@ -2472,13 +2479,7 @@ const CROWD_GEO = (() => {
   const shoe = G3.ell(0.078, 0.052, 0.125, 10, 7); shoe.translate(0, -0.03, 0.04);
   return { torso, pelvis, head, hair, uarm, farm, hand, thigh, shin, shoe };
 })();
-const CROWD_COLORS = {
-  shirt: ['#e0474f', '#f08a2c', '#4fae4c', '#25a39d', '#3a7cd6', '#7a58d0', '#d1559c', '#8a8794', '#34456a', '#9c5530', '#2f2d3a', '#c95b2e', '#5b8f3a', '#ffffff'],
-  pants: ['#2c3a5c', '#393a42', '#6a6e78', '#7a6a50', '#232630', '#4a5c7c'],
-  shoe: ['#f1f1f1', '#2a2a2e', '#c44a3a', '#6b7888', '#e7d9bf'],
-  hair: ['#1d181b', '#2b211b', '#3c2a1f', '#55392a', '#141414', '#4a3b33'],
-  skin: ['#f6d0b2', '#eec09c', '#e2ac88', '#f8dac4', '#d69f7c', '#f3c9a6'],
-};
+
 const PART_DEFS = [
   ['torso', 'torso', 'shirt', 'torso'], ['pelvis', 'pelvis', 'pants', 'hips'],
   ['head', 'head', 'skin', 'neck'], ['hair', 'hair', 'hair', 'neck'],
@@ -2694,10 +2695,10 @@ function lookAtMe(p, o, w) {
   const dx = PL.x - p.x, dz = PL.z - p.z, dist = Math.hypot(dx, dz) || 0.001;
   const headY = p.state === 'idle' ? 0.9 : 1.2;
   const rel = wrapAngle(Math.atan2(dx, dz) - p.yaw - o[P.SY]);
-  const hw = clamp(rel, -1.15, 1.15);
+  const hw = THREE.MathUtils.clamp(rel, -1.15, 1.15);
   const pitch = -Math.atan2(PL.eye - headY - p.y, dist) - 0.06 - o[P.SX];
-  o[P.HW] = lerp(o[P.HW], hw, w);
-  o[P.HX] = lerp(o[P.HX], clamp(pitch, -1.0, 0.8), w);
+  o[P.HW] = THREE.MathUtils.lerp(o[P.HW], hw, w);
+  o[P.HX] = THREE.MathUtils.lerp(o[P.HX], THREE.MathUtils.clamp(pitch, -1.0, 0.8), w);
 }
 function poseIdle(p, t, o) {
   o.fill(0); o[P.HY] = C.HIP_Y;
@@ -2731,7 +2732,7 @@ function poseChase(p, t, o) {
   o.fill(0);
   const run = p.kind === 1;
   const s = Math.sin(p.phase), c = Math.cos(p.phase);
-  const g = clamp(p.spd / (run ? 2.8 : 1.3), 0, 1.15);
+  const g = THREE.MathUtils.clamp(p.spd / (run ? 2.8 : 1.3), 0, 1.15);
   const amp = (run ? 0.85 : 0.44) * g;
   const hic = Math.pow(Math.max(0, Math.sin(t * 5 + p.seed * 3)), 4);
   o[P.HY] = C.HIP_Y - Math.abs(c) * (run ? 0.045 : 0.02) * g - (run ? 0.035 : 0.012);
@@ -2747,12 +2748,12 @@ function poseChase(p, t, o) {
     o[P.LSZ] = 0.22; o[P.RSZ] = -0.22; o[P.LEX] = -0.35; o[P.REX] = -0.35;
   } else {
     const r = p.reach, hang = -o[P.SX] + 0.1, sw = s * 0.2 * g;
-    o[P.LSX] = lerp(hang + sw, -1.72 + tr, r); o[P.RSX] = lerp(hang - sw, -1.66 - tr, r);
-    o[P.LSZ] = lerp(0.05, 0.13, r); o[P.RSZ] = -o[P.LSZ];
-    o[P.LSY] = lerp(0, -0.12, r); o[P.RSY] = -o[P.LSY];
-    o[P.LEX] = lerp(-0.12, -0.28, r); o[P.REX] = o[P.LEX];
+    o[P.LSX] = THREE.MathUtils.lerp(hang + sw, -1.72 + tr, r); o[P.RSX] = THREE.MathUtils.lerp(hang - sw, -1.66 - tr, r);
+    o[P.LSZ] = THREE.MathUtils.lerp(0.05, 0.13, r); o[P.RSZ] = -o[P.LSZ];
+    o[P.LSY] = THREE.MathUtils.lerp(0, -0.12, r); o[P.RSY] = -o[P.LSY];
+    o[P.LEX] = THREE.MathUtils.lerp(-0.12, -0.28, r); o[P.REX] = o[P.LEX];
   }
-  if (p.stagger > 0) { const k = Math.sin(clamp(p.stagger / 0.3, 0, 1) * Math.PI); o[P.SX] -= 0.55 * k; o[P.HX] -= 0.6 * k; o[P.LSX] += 0.6 * k; o[P.RSX] += 0.5 * k; }
+  if (p.stagger > 0) { const k = Math.sin(THREE.MathUtils.clamp(p.stagger / 0.3, 0, 1) * Math.PI); o[P.SX] -= 0.55 * k; o[P.HX] -= 0.6 * k; o[P.LSX] += 0.6 * k; o[P.RSX] += 0.5 * k; }
   lookAtMe(p, o, 1);
 }
 const SLOT_KIND = ['stand', 'kneel', 'side', 'low', 'stand', 'side', 'kneel', 'low'];
@@ -2797,7 +2798,7 @@ function makeCorpse(back) {
 }
 function poseDying(p, t, o) {
   o.set(p.corpse);
-  const k = clamp(p.dieT / p.fallT, 0, 1);
+  const k = THREE.MathUtils.clamp(p.dieT / p.fallT, 0, 1);
   let a = easeInQuad(k) * Math.PI / 2;
   if (p.dieT > p.fallT) { const x = p.dieT - p.fallT; a = Math.PI / 2 - 0.09 * Math.exp(-x * 9) * Math.abs(Math.sin(x * 24)); }
   const sgn = p.back ? -1 : 1;
@@ -2808,7 +2809,7 @@ function poseDying(p, t, o) {
   o[P.LSX] += -1.3 * fl; o[P.RSX] += -1.1 * fl;
   o[P.HX] += (p.back ? -0.6 : 0.5) * fl;
   if (p.how === 'head') o[P.HX] += (p.back ? -0.9 : 0.6) * Math.min(1, p.dieT * 6);
-  if (p.how === 'stab') o[P.HY] = lerp(C.HIP_Y, C.HIP_Y - 0.15, fl);
+  if (p.how === 'stab') o[P.HY] = THREE.MathUtils.lerp(C.HIP_Y, C.HIP_Y - 0.15, fl);
 }
 // ── 누운 사람 ──
 // 등을 대고 반듯이 누움: 몸통이 머리 쪽으로 살짝 들려 큰 머리가 바닥에 닿는다. 팔다리는 움직이지 않는다.
@@ -2819,8 +2820,8 @@ function lieLook(p, o, w = 1) {
   const a = dx * -Math.sin(p.yaw) + dz * -Math.cos(p.yaw);               // 머리 쪽(+) / 발 쪽(-)
   const v = Math.max(0.3, PL.eye - p.hc.y);
   const L = Math.hypot(a, b, v) || 1;
-  o[P.HX] = lerp(o[P.HX], clamp(-Math.asin(clamp(a / L, -1, 1)) - 0.24, 0, 0.8), w);    // 턱을 당겨 고개를 듦
-  o[P.HW] = lerp(o[P.HW], clamp(Math.atan2(b, v), -1.3, 1.3), w);                   // 옆으로 돌림
+  o[P.HX] = THREE.MathUtils.lerp(o[P.HX], THREE.MathUtils.clamp(-Math.asin(THREE.MathUtils.clamp(a / L, -1, 1)) - 0.24, 0, 0.8), w);    // 턱을 당겨 고개를 듦
+  o[P.HW] = THREE.MathUtils.lerp(o[P.HW], THREE.MathUtils.clamp(Math.atan2(b, v), -1.3, 1.3), w);                   // 옆으로 돌림
 }
 function poseLie(p, t, o) {
   o.fill(0);
@@ -2845,7 +2846,7 @@ function poseLieCling(p, t, o) {
 }
 function poseLieDead(p, t, o) {
   poseLie(p, t, o);
-  const k = clamp(p.dieT / 0.25, 0, 1);
+  const k = THREE.MathUtils.clamp(p.dieT / 0.25, 0, 1);
   o[P.HW] = (p.seed % 2 < 1 ? 1 : -1) * 1.1 * easeOutCubic(k);
   o[P.HX] = 0.2;
   o[P.LSZ] = 0.6; o[P.RSZ] = -0.6; o[P.LSX] = 0.2; o[P.RSX] = 0.2;
@@ -2864,12 +2865,12 @@ function computePose(p, t, o) {
     case 'rise': {
       poseIdle(p, t, p.tmp); poseChase(p, t, o);
       const k = easeInOutSine(p.rise);
-      for (let i = 0; i < NPOSE; i++) o[i] = lerp(p.tmp[i], o[i], k);
+      for (let i = 0; i < NPOSE; i++) o[i] = THREE.MathUtils.lerp(p.tmp[i], o[i], k);
       break;
     }
     case 'cling': {
       poseCling(p, t, o);
-      if (p.clingT < 0.25) { poseChase(p, t, p.tmp); const k = easeOutCubic(p.clingT / 0.25); for (let i = 0; i < NPOSE; i++) o[i] = lerp(p.tmp[i], o[i], k); }
+      if (p.clingT < 0.25) { poseChase(p, t, p.tmp); const k = easeOutCubic(p.clingT / 0.25); for (let i = 0; i < NPOSE; i++) o[i] = THREE.MathUtils.lerp(p.tmp[i], o[i], k); }
       break;
     }
     case 'dying': poseDying(p, t, o); break;
@@ -2934,14 +2935,14 @@ function playerMove(dt, canMove) {
   const fx = -Math.sin(PL.yaw), fz = -Math.cos(PL.yaw), rx = Math.cos(PL.yaw), rz = -Math.sin(PL.yaw);
   // 앞으로는 조금 더 빠르게
   const fwd = -iz;
-  let spd = fwd > 0 ? lerp(3.0, 3.6, fwd) : 3.0;
+  let spd = fwd > 0 ? THREE.MathUtils.lerp(3.0, 3.6, fwd) : 3.0;
   const nCling = PL.clingers.length;
   // 달리기: PC는 Shift, 휴대폰은 스틱을 앞으로 끝까지. 쏘거나 붙잡히면 멈춤
   PL.runBlock -= dt;
   const run = canMove && (INPUT.run || INPUT.stickRun) && fwd > 0.55 && !nCling && PL.runBlock <= 0 && WEP.stabT <= 0;
   PL.running = run;
   PL.run = approach(PL.run, run ? 1 : 0, run ? 7 : 13, dt);
-  if (run) { spd = lerp(4.3, 5.0, fwd); ix *= 0.6; }
+  if (run) { spd = THREE.MathUtils.lerp(4.3, 5.0, fwd); ix *= 0.6; }
   // 발목을 잡혔으면 훨씬 무겁다
   if (nCling) { let w = 0; for (const q of PL.clingers) w += q.kind === 2 ? 1.9 : 1; spd *= Math.max(0.16, 1 - 0.24 * w); }
   const tx = (fx * fwd + rx * ix) * spd, tz = (fz * fwd + rz * ix) * spd;
@@ -2956,7 +2957,7 @@ function playerMove(dt, canMove) {
   PL.y = approach(PL.y, floorAt(PL.x, PL.z), 14, dt);
   PL.eye = PL.y + EYE;
   const sp = Math.hypot(PL.vx, PL.vz);
-  PL.bobAmt = approach(PL.bobAmt, clamp(sp / 3.4, 0, 1.45), 8, dt);
+  PL.bobAmt = approach(PL.bobAmt, THREE.MathUtils.clamp(sp / 3.4, 0, 1.45), 8, dt);
   PL.bob += moved * (PL.running ? 2.2 : 2.55);
   PL.stepAcc += moved;
   if (PL.stepAcc > (PL.running ? 0.84 : 0.66)) {
@@ -3093,9 +3094,9 @@ let VM_LAYOUT = { x: 0.19, y: -0.128, z: -0.48, sx: 0.16, sy: -0.2, sz: -0.52 };
 function vmLayout() {
   // 좁은 세로 화면에서는 총을 가운데 아래로 모은다
   const a = VW / VH;
-  const k = clamp((a - 0.55) / 1.1, 0, 1);
-  const wide = clamp((a - 1.8) / 0.5, 0, 1);   // 가로로 아주 긴 휴대폰: 조금 멀리
-  VM_LAYOUT = { x: lerp(0.088, 0.19, k) + wide * 0.03, y: lerp(-0.2, -0.128, k) - wide * 0.012, z: lerp(-0.64, -0.48, k) - wide * 0.1, sx: lerp(0.075, 0.16, k) + wide * 0.02, sy: lerp(-0.26, -0.2, k) - wide * 0.01, sz: lerp(-0.7, -0.52, k) - wide * 0.08 };
+  const k = THREE.MathUtils.clamp((a - 0.55) / 1.1, 0, 1);
+  const wide = THREE.MathUtils.clamp((a - 1.8) / 0.5, 0, 1);   // 가로로 아주 긴 휴대폰: 조금 멀리
+  VM_LAYOUT = { x: THREE.MathUtils.lerp(0.088, 0.19, k) + wide * 0.03, y: THREE.MathUtils.lerp(-0.2, -0.128, k) - wide * 0.012, z: THREE.MathUtils.lerp(-0.64, -0.48, k) - wide * 0.1, sx: THREE.MathUtils.lerp(0.075, 0.16, k) + wide * 0.02, sy: THREE.MathUtils.lerp(-0.26, -0.2, k) - wide * 0.01, sz: THREE.MathUtils.lerp(-0.7, -0.52, k) - wide * 0.08 };
 }
 
 // ── 무기 상태 ──
@@ -3265,7 +3266,7 @@ function bulletHit(dmgHead, dmgBody, dmgLegs, power, weapon, falloff = 0) {
     const hx = _ro.x + _rd.x * t, hy = _ro.y + _rd.y * t, hz = _ro.z + _rd.z * t;
     let dmg = HIT.part === 'head' ? dmgHead : HIT.part === 'body' ? dmgBody : dmgLegs;
     if (weapon === 'pistol' || weapon === 'shotgun') dmg *= GUN_MOD.damage;
-    if (falloff) dmg *= clamp(1.35 - t / falloff, 0.3, 1);
+    if (falloff) dmg *= THREE.MathUtils.clamp(1.35 - t / falloff, 0.3, 1);
     hurtPerson(p, dmg, HIT.part, _rd.x, _rd.z, hx, hy, hz, power, weapon);
     return { kind: 'person', p, part: HIT.part };
   }
@@ -3273,7 +3274,7 @@ function bulletHit(dmgHead, dmgBody, dmgLegs, power, weapon, falloff = 0) {
     const hx = _ro.x + _rd.x * wallT, hy = _ro.y + _rd.y * wallT, hz = _ro.z + _rd.z * wallT;
     addDecal(hx, hy, hz, wn.x, wn.y, wn.z, rand(0.07, 0.1), 4);
     dust(hx, hy, hz, wn.x, wn.y, wn.z, surf === 'floor' ? 0xa07c2c : surf === 'ceil' ? 0xe0cf93 : 0xd6ac36);
-    if (Math.random() < 0.6) sfxWallHit(clamp(1.2 - wallT * 0.05, 0.3, 1), panOf(hx, hz));
+    if (Math.random() < 0.6) sfxWallHit(THREE.MathUtils.clamp(1.2 - wallT * 0.05, 0.3, 1), panOf(hx, hz));
   }
   return null;
 }
@@ -3391,7 +3392,7 @@ function setDecal(d) {
 function growDecals(dt) {
   for (let k = growing.length - 1; k >= 0; k--) {
     const d = growing[k]; d.t += dt;
-    d.s = lerp(d.size * 0.2, d.size, easeOutCubic(d.t / d.dur)); setDecal(d);
+    d.s = THREE.MathUtils.lerp(d.size * 0.2, d.size, easeOutCubic(d.t / d.dur)); setDecal(d);
     if (d.t >= d.dur) growing.splice(k, 1);
   }
 }
@@ -3478,7 +3479,7 @@ function flashTick(dt) {
 // 소리 좌우: 내 오른쪽 방향 (cos yaw, -sin yaw) 으로 얼마나 치우쳤나
 function panOf(x, z) {
   const dx = x - PL.x, dz = z - PL.z, L = Math.hypot(dx, dz) || 1;
-  return clamp((dx * Math.cos(PL.yaw) - dz * Math.sin(PL.yaw)) / L, -1, 1) * 0.85;
+  return THREE.MathUtils.clamp((dx * Math.cos(PL.yaw) - dz * Math.sin(PL.yaw)) / L, -1, 1) * 0.85;
 }
 
 // ── 손 움직임 ──
@@ -3487,8 +3488,8 @@ function vmUpdate(dt) {
   VMS.t += dt;
   const dyaw = wrapAngle(PL.yaw - PL.lastYaw), dpitch = PL.pitch - PL.lastPitch;
   PL.lastYaw = PL.yaw; PL.lastPitch = PL.pitch;
-  VMS.swayX = approach(VMS.swayX, clamp(dyaw * 2.2, -0.05, 0.05), 10, dt);
-  VMS.swayY = approach(VMS.swayY, clamp(-dpitch * 2.2, -0.05, 0.05), 10, dt);
+  VMS.swayX = approach(VMS.swayX, THREE.MathUtils.clamp(dyaw * 2.2, -0.05, 0.05), 10, dt);
+  VMS.swayY = approach(VMS.swayY, THREE.MathUtils.clamp(-dpitch * 2.2, -0.05, 0.05), 10, dt);
   const bob = PL.bobAmt;
   const bx = Math.sin(PL.bob) * 0.011 * bob, by = -Math.abs(Math.cos(PL.bob)) * 0.012 * bob + Math.sin(VMS.t * 1.7) * 0.0025;
   // 무기 바꿀 때 내렸다 올림
@@ -3595,7 +3596,7 @@ function notice(p, delay) {
 }
 function rise(p) {
   p.state = 'rise'; p.rise = 0; p.riseDur = p.idle === 0 ? 0.45 : p.idle === 3 ? 0.8 : 1.0;
-  if (p.idle === 3) sfxChair(panOf(p.x, p.z), clamp(1.2 - Math.hypot(p.x - PL.x, p.z - PL.z) * 0.08, 0.25, 1));
+  if (p.idle === 3) sfxChair(panOf(p.x, p.z), THREE.MathUtils.clamp(1.2 - Math.hypot(p.x - PL.x, p.z - PL.z) * 0.08, 0.25, 1));
 }
 function noiseAlert(radius) {
   for (const p of live) {
@@ -3649,7 +3650,7 @@ function hurtPerson(p, dmg, part, dx, dz, hx, hy, hz, power, weapon) {
     const wx = hx + dx * RAY.t, wy = hy - 0.08 * RAY.t, wz = hz + dz * RAY.t;
     addDecal(wx, wy, wz, RAY.nx, RAY.ny, RAY.nz, rand(0.35, 0.6) * (head ? 1.3 : 1), RAY.ny > 0.5 ? (Math.random() < 0.5 ? 0 : 1) : 5);
   }
-  const pan = panOf(p.x, p.z), dist = Math.hypot(p.x - PL.x, p.z - PL.z), v = clamp(1.3 - dist * 0.07, 0.3, 1);
+  const pan = panOf(p.x, p.z), dist = Math.hypot(p.x - PL.x, p.z - PL.z), v = THREE.MathUtils.clamp(1.3 - dist * 0.07, 0.3, 1);
   sfxFlesh(v, pan);
   if (head) sfxHead(pan);
   if (p.state === 'idle' || p.state === 'rise') { p.state = 'chase'; p.rise = 1; p.look = 1; }
@@ -3730,7 +3731,7 @@ function lieTick(p, dt, d, dx, dz) {
     const onBed = b && p.x > b.x0 - m && p.x < b.x1 + m && p.z > b.z0 - m && p.z < b.z1 + m;
     if (!onBed) {
       p.yOff = Math.max(0, p.yOff - dt * 3.5);
-      if (p.yOff === 0) sfxFall(clamp(1.1 - d * 0.08, 0.2, 0.9), panOf(p.x, p.z), p.los ? 0 : 800);
+      if (p.yOff === 0) sfxFall(THREE.MathUtils.clamp(1.1 - d * 0.08, 0.2, 0.9), panOf(p.x, p.z), p.los ? 0 : 800);
     }
   }
   // 몸통, 머리, 발 모두 벽에 걸리게
@@ -3790,7 +3791,7 @@ function crowdTick(dt) {
       p.stepAcc = (p.stepAcc || 0) + p.spd * dt;
       if (p.stepAcc > (p.kind ? 0.85 : 0.62)) {
         p.stepAcc = 0;
-        if (d < 8 && G.state === 'play') sfxCrowdStep(clamp(0.95 - d * 0.1, 0.14, 0.8), panOf(p.x, p.z), p.kind === 1);
+        if (d < 8 && G.state === 'play') sfxCrowdStep(THREE.MathUtils.clamp(0.95 - d * 0.1, 0.14, 0.8), panOf(p.x, p.z), p.kind === 1);
       }
       collideCircle(p, 0.25, p.y + 0.2, p.y + 1.4);
       const face = d < 3 ? Math.atan2(dx, dz) : Math.atan2(p.dirx, p.dirz);
@@ -3812,13 +3813,13 @@ function crowdTick(dt) {
       if (!p.landed && p.dieT > p.fallT) {
         p.landed = true;
         const occl = !losClear(p.x, 0.5, p.z, PL.x, PL.eye, PL.z);
-        sfxFall(clamp(1.2 - d * 0.08, 0.2, 1), panOf(p.x, p.z), occl ? 700 : 0);
+        sfxFall(THREE.MathUtils.clamp(1.2 - d * 0.08, 0.2, 1), panOf(p.x, p.z), occl ? 700 : 0);
         if (Math.random() < 0.7) sfxSplat(0.6, panOf(p.x, p.z));
       }
       if (!p.pooled && p.dieT > p.fallT + 0.25) {
         p.pooled = true;
         _v.set(0, 0.15, 0).applyMatrix4(CR.torso.matrixWorld);
-        addDecal(lerp(p.x, p.ta.x, 0.5), p.y, lerp(p.z, p.ta.z, 0.5), 0, 1, 0, rand(0.9, 1.3), 3, 2.4);
+        addDecal(THREE.MathUtils.lerp(p.x, p.ta.x, 0.5), p.y, THREE.MathUtils.lerp(p.z, p.ta.z, 0.5), 0, 1, 0, rand(0.9, 1.3), 3, 2.4);
       }
       if (p.dieT > p.fallT + 0.7) {
         animatePerson(p, dt);
@@ -3863,7 +3864,7 @@ function dragTick(dt) {
     const d = Math.hypot(p.x - PL.x, p.z - PL.z); if (d < 15) list.push([d, p, sp]);
   }
   list.sort((a, b) => a[0] - b[0]);
-  dragAssign(list.slice(0, 3).map(([d, p, sp]) => ({ p, lv: clamp(0.18 + sp / 2.4, 0, 1) * Math.pow(1 - d / 15, 1.5), pan: panOf(p.x, p.z), occl: p.state === 'chase' && !p.los })), dt);
+  dragAssign(list.slice(0, 3).map(([d, p, sp]) => ({ p, lv: THREE.MathUtils.clamp(0.18 + sp / 2.4, 0, 1) * Math.pow(1 - d / 15, 1.5), pan: panOf(p.x, p.z), occl: p.state === 'chase' && !p.los })), dt);
 }
 function angleTo(cur, target, k, dt) { return cur + wrapAngle(target - cur) * (1 - Math.exp(-k * dt)); }
 function speechTick(p, dt, d) {
@@ -3882,7 +3883,7 @@ function speechTick(p, dt, d) {
     p.speakCD = rand(4.5, 8.5);
     if (d > 11 || voicesPlaying() >= 5 || G.state !== 'play' || (p.vo && !p.vo.stopped)) return;
     const occ = !losClear(p.hc.x, p.hc.y + 0.1, p.hc.z, PL.x, PL.eye, PL.z);
-    const h = playVoice(p.voiceKey, { rate: p.vrate * 0.97, gain: clamp(0.75 - d * 0.05, 0.12, 0.6) * (occ ? 0.7 : 1), pan: panOf(p.x, p.z), sob: 0.022, lp: occ ? 650 : 1500, verb: 0.42 });
+    const h = playVoice(p.voiceKey, { rate: p.vrate * 0.97, gain: THREE.MathUtils.clamp(0.75 - d * 0.05, 0.12, 0.6) * (occ ? 0.7 : 1), pan: panOf(p.x, p.z), sob: 0.022, lp: occ ? 650 : 1500, verb: 0.42 });
     if (h) p.vo = h;
     return;
   }
@@ -3890,7 +3891,7 @@ function speechTick(p, dt, d) {
   p.speakCD = cling ? rand(2.0, 4.0) : rand(2.2, 4.8) * (d > 9 ? 1.4 : 1);
   if (talking || d > 19 || voicesPlaying() >= 6 || G.state !== 'play') return;
   const occl = !cling && !(p.state === 'chase' ? p.los : losClear(p.hc.x, p.hc.y, p.hc.z, PL.x, PL.eye, PL.z));
-  const vol = (cling ? 0.62 : clamp(1.25 - d * 0.075, 0.2, 1)) * (occl ? 0.75 : 1);
+  const vol = (cling ? 0.62 : THREE.MathUtils.clamp(1.25 - d * 0.075, 0.2, 1)) * (occl ? 0.75 : 1);
   const key = cling ? p.voiceKey.replace(/^g_/, 'f_') : p.voiceKey;
   const h = playVoice(VO[key] ? key : p.voiceKey, { rate: p.vrate * (cling ? 0.96 : 1), gain: vol * (lie ? 0.85 : 1), pan: panOf(p.x, p.z), sob: lie ? 0.018 : cling ? 0.014 : 0.028, lp: occl ? 720 : lie ? 1900 : d > 9 ? 2600 : 0, verb: occl ? 0.5 : lie ? 0.38 : 0.32 });
   if (h && lie) p.speakCD += rand(1.0, 2.5);
@@ -3982,14 +3983,14 @@ function burstRoom(o = {}) {
     p = newPerson(mx + ix * 0.95, mz + iz * 0.95, { state: 'chase', kind: 2, yaw: Math.atan2(-ix, -iz) });
     if (!p) return null;
     gdoorSet(g, rand(1.3, 1.5), 1.7);
-    if (ac) sfxCreak(ac.currentTime, 1.7, clamp(1.15 - dist * 0.06, 0.25, 0.9), rand(150, 185));
+    if (ac) sfxCreak(ac.currentTime, 1.7, THREE.MathUtils.clamp(1.15 - dist * 0.06, 0.25, 0.9), rand(150, 185));
     p.spd = 0.4;
   } else {
     const runner = Math.random() < (G.eventT > 12 ? 0.4 : 0.28);
     p = newPerson(mx + ix * 0.6, mz + iz * 0.6, { state: 'chase', kind: runner ? 1 : 0, yaw: Math.atan2(-ix, -iz), fast: 1.2 });
     if (!p) return null;
     gdoorSet(g, rand(1.4, 1.55), 15);
-    sfxDoorBang(pan, clamp(1.3 - dist * 0.06, 0.3, 1.1), occl ? 900 : 0);
+    sfxDoorBang(pan, THREE.MathUtils.clamp(1.3 - dist * 0.06, 0.3, 1.1), occl ? 900 : 0);
     if (dist < 9) PL.shake = Math.max(PL.shake, 0.18);
   }
   p.los = false; p.losT = 0.05; p.speakCD = rand(0.2, 1.4);
@@ -4005,7 +4006,7 @@ function lightsTick(dt) {
     if (f.kind === 'panel') { f.near = Math.hypot(f.x - PL.x, f.z - PL.z); f.pan = f.near < 9 ? panOf(f.x, f.z) : 0; }
     const before = f.I;
     if (f.kind === 'spill') {
-      const target = DOORS.inner.open ? clamp(LEVEL.lobbyLight.I, 0, 1) * clamp(DOORS.inner.a / 1.2, 0, 1) : 0;
+      const target = DOORS.inner.open ? THREE.MathUtils.clamp(LEVEL.lobbyLight.I, 0, 1) * THREE.MathUtils.clamp(DOORS.inner.a / 1.2, 0, 1) : 0;
       f.I = target; fixApply(f, target);
     } else fixTick(f, dt);
     if (f.mesh >= 0 && Math.abs(before - f.I) > 0.001) {
@@ -4014,14 +4015,17 @@ function lightsTick(dt) {
     }
   }
   if (panelDirty) { LEVEL.panels.instanceColor.needsUpdate = true; LEVEL.glows.instanceColor.needsUpdate = true; panelDirty = false; }
-  for (const { m, f } of LEVEL.lampMeshes) m.material.color.setScalar(lerp(0.55, 1.0, clamp(f.I, 0, 1)));
+  for (const { m, f } of LEVEL.lampMeshes) m.material.color.setScalar(THREE.MathUtils.lerp(0.55, 1.0, THREE.MathUtils.clamp(f.I, 0, 1)));
   // 끝방 알전구, 방마다 모니터
-  if (LEVEL.bulbFix) { const k = clamp(LEVEL.bulbFix.I, 0, 1); LEVEL.bulb.material.color.setRGB(lerp(0.22, 1, k), lerp(0.2, 0.95, k), lerp(0.16, 0.77, k)); }
-  if (LEVEL.gunScr) LEVEL.gunScr.material.color.copy(_scrOff).lerp(_scrOn, clamp(LEVEL.gunScreen.I, 0, 1));
+  if (LEVEL.bulbFix) {
+    const k = THREE.MathUtils.clamp(LEVEL.bulbFix.I, 0, 1);
+    LEVEL.bulb.material.color.setRGB(THREE.MathUtils.lerp(0.22, 1, k), THREE.MathUtils.lerp(0.2, 0.95, k), THREE.MathUtils.lerp(0.16, 0.77, k));
+  }
+  if (LEVEL.gunScr) LEVEL.gunScr.material.color.copy(_scrOff).lerp(_scrOn, THREE.MathUtils.clamp(LEVEL.gunScreen.I, 0, 1));
   let scrDirty = false;
   for (const r of LEVEL.rooms) {
     if (!r.fix) continue;
-    const I = clamp(r.fix.I, 0, 1);
+    const I = THREE.MathUtils.clamp(r.fix.I, 0, 1);
     if (r.scrI !== undefined && Math.abs(r.scrI - I) < 0.04) continue;
     r.scrI = I; LEVEL.furn.screens.m.setColorAt(r.screen, _col.copy(_scrOff).lerp(_scrOn, I)); scrDirty = true;
   }
@@ -4029,7 +4033,7 @@ function lightsTick(dt) {
   lfFlush();
   // 형광등 웅: 고시원 안에서는 밝은 만큼, 집 안에서는 문 너머로 먹먹하게
   if (ac && HUM.on) {
-    const l = PL.inHouse ? (DOORS.inner.open ? 0.55 : 0.4) : clamp(lfAtCPU(PL.x, PL.z) * 0.95, 0, 1);
+    const l = PL.inHouse ? (DOORS.inner.open ? 0.55 : 0.4) : THREE.MathUtils.clamp(lfAtCPU(PL.x, PL.z) * 0.95, 0, 1);
     humSet(l, !PL.inHouse || DOORS.inner.a > 0.4);
   }
 }
@@ -4309,7 +4313,7 @@ function threatTick(dt) {
     const w = T.tgt;
     if (w) {
       T.a += wrapAngle(w.a - T.a) * (1 - Math.exp(-16 * dt));
-      const base = w.cl ? 1 : clamp(1.2 - w.d / 9, 0.3, 1);
+      const base = w.cl ? 1 : THREE.MathUtils.clamp(1.2 - w.d / 9, 0.3, 1);
       const pulse = w.d < 3.5 ? 0.72 + 0.28 * Math.sin(G.t * 12) : 1;
       T.o = approach(T.o, base * pulse, 12, dt);
     } else {
@@ -4352,7 +4356,7 @@ function hudTick(dt = 1 / 60) {
     if (WEP.cur === 'shotgun' && WEP.shotgun.mag === 0 && WEP.shotgun.reloadT <= 0) pr = WEP.shotgun.res > 0 ? (IS_TOUCH ? '재장전' : 'R 재장전') : '';
   }
   if (pr !== lastPrompt) { lastPrompt = pr; els.prompt.textContent = pr; els.prompt.hidden = !pr; }
-  const v = Math.round(clamp(PL.pressure, 0, 1) * (0.75 + 0.25 * Math.sin(G.t * 9)) * 100) / 100;
+  const v = Math.round(THREE.MathUtils.clamp(PL.pressure, 0, 1) * (0.75 + 0.25 * Math.sin(G.t * 9)) * 100) / 100;
   if (v !== lastVig) { lastVig = v; els.vig.style.opacity = v; els.vig.style.visibility = v > 0 ? 'visible' : 'hidden'; }
   // 목표 화살표
   let tx = null, tz = null, key = '';
@@ -4380,8 +4384,8 @@ function fadeTo(color, dur, done) {
   const t0 = performance.now();
   if (fadeAnim) cancelAnimationFrame(fadeAnim);
   const step = () => {
-    const k = clamp((performance.now() - t0) / (dur * 1000), 0, 1);
-    el.style.opacity = lerp(from, 1, k); el.style.visibility = 'visible';
+    const k = THREE.MathUtils.clamp((performance.now() - t0) / (dur * 1000), 0, 1);
+    el.style.opacity = THREE.MathUtils.lerp(from, 1, k); el.style.visibility = 'visible';
     if (k < 1) fadeAnim = requestAnimationFrame(step); else { fadeAnim = null; if (done) done(); }
   };
   step();
@@ -4389,7 +4393,7 @@ function fadeTo(color, dur, done) {
 function fadeFrom(dur) {
   const el = els.fade, t0 = performance.now(), from = parseFloat(el.style.opacity || '1');
   if (fadeAnim) cancelAnimationFrame(fadeAnim);
-  const step = () => { const k = clamp((performance.now() - t0) / (dur * 1000), 0, 1); el.style.opacity = lerp(from, 0, k); el.style.visibility = k < 1 ? 'visible' : 'hidden'; if (k < 1) fadeAnim = requestAnimationFrame(step); else fadeAnim = null; };
+  const step = () => { const k = THREE.MathUtils.clamp((performance.now() - t0) / (dur * 1000), 0, 1); el.style.opacity = THREE.MathUtils.lerp(from, 0, k); el.style.visibility = k < 1 ? 'visible' : 'hidden'; if (k < 1) fadeAnim = requestAnimationFrame(step); else fadeAnim = null; };
   step();
 }
 function showResult() {
@@ -4467,7 +4471,7 @@ function buildDoorScene() {
   // ---- wall: left / right / lintel, leaving a door opening ----
   const sideW = (WALL_W - DOOR_W) / 2;
   wallPiece(sideW, WALL_H, -(HALF_W + sideW / 2), WALL_BOTTOM + WALL_H / 2);
-  wallPiece(sideW, WALL_H,  (HALF_W + sideW / 2), WALL_BOTTOM + WALL_H / 2);
+  wallPiece(sideW, WALL_H, (HALF_W + sideW / 2), WALL_BOTTOM + WALL_H / 2);
   const lintelH = WALL_TOP - DOOR_H;                       // fixed: was 4 - H2 + 0.5
   wallPiece(DOOR_W, lintelH, 0, DOOR_H + lintelH / 2);
 
@@ -4476,7 +4480,7 @@ function buildDoorScene() {
   const FT = 0.08;
   [
     [-HALF_W - FT / 2, DOOR_H / 2, FT, DOOR_H + FT],
-    [ HALF_W + FT / 2, DOOR_H / 2, FT, DOOR_H + FT],
+    [HALF_W + FT / 2, DOOR_H / 2, FT, DOOR_H + FT],
     [0, DOOR_H + FT / 2, DOOR_W + FT * 2, FT],
   ].forEach(([x, y, w, h]) => mesh(new THREE.BoxGeometry(w, h, 0.12), frameMat, x, y, 0));
 
@@ -4562,12 +4566,12 @@ function gateOpen() {
 function doorSceneTick(dt) {
   DS.t += dt;
   const t = DS.t;
-  DS.lever.rotation.z = t > 1.35 && t < 1.9 ? -0.55 * Math.sin(clamp((t - 1.35) / 0.55, 0, 1) * Math.PI) : 0;
+  DS.lever.rotation.z = t > 1.35 && t < 1.9 ? -0.55 * Math.sin(THREE.MathUtils.clamp((t - 1.35) / 0.55, 0, 1) * Math.PI) : 0;
   DS.pad.material.opacity = t > 0.5 && t < 1.3 ? (Math.sin(t * 40) > 0 ? 1 : 0.5) : 1;
   DS.door.rotation.y = -easeInOutSine((t - 1.6) / 2.6) * 1.55;
   const k = easeInOutSine(t / 4.4);
-  doorCamera.position.set(lerp(0.26, 0.06, k), lerp(1.4, 1.36, k), lerp(3.0, 0.7, k));
-  doorCamera.lookAt(lerp(0.05, -0.05, k), lerp(1.08, 1.15, k), lerp(0, -1.4, k));
+  doorCamera.position.set(THREE.MathUtils.lerp(0.26, 0.06, k), THREE.MathUtils.lerp(1.4, 1.36, k), THREE.MathUtils.lerp(3.0, 0.7, k));
+  doorCamera.lookAt(THREE.MathUtils.lerp(0.05, -0.05, k), THREE.MathUtils.lerp(1.08, 1.15, k), THREE.MathUtils.lerp(0, -1.4, k));
   if (t > 4.15 && !DS.fading) { DS.fading = true; fadeTo('#000000', 0.45, () => { DS.fading = false; enterHouse(); }); }
 }
 function enterHouse() {
@@ -4612,7 +4616,7 @@ function startGame() {
 
 // ───────────────────────── 입력 ─────────────────────────
 const MOUSE_SENS = 0.0022, TOUCH_SENS = 0.0066;
-let SENS = clamp(+store.get('fh_room_sens', 1) || 1, 0.4, 2.2);
+let SENS = THREE.MathUtils.clamp(+store.get('room_sens', 1) || 1, 0.4, 2.2);
 // 마우스 잠금이 아예 안 되는 곳(일부 앱 안 브라우저 등)에서만 잠금 없이 둘러보기
 let LOCKED = false, FALLBACK = typeof canvas.requestPointerLock !== 'function', PAUSED = false;
 let lockFails = 0, lastFailT = -1e9, wantResume = false;
@@ -4625,7 +4629,7 @@ function setTouch(on) {
 }
 function look(dx, dy, k) {
   PL.yaw -= dx * k * SENS;
-  PL.pitch = clamp(PL.pitch - dy * k * SENS, -1.32, 1.32);
+  PL.pitch = THREE.MathUtils.clamp(PL.pitch - dy * k * SENS, -1.32, 1.32);
 }
 function lockFailed() {
   const now = performance.now();
@@ -4640,7 +4644,7 @@ function requestLock() {
   try {
     const p = canvas.requestPointerLock();
     if (p && p.catch) p.catch(lockFailed);
-  } catch (e) { lockFailed(); }
+  } catch { lockFailed(); }
 }
 function pauseHint() { $('pauseHint').textContent = IS_TOUCH || FALLBACK ? '' : 'Esc를 누르면 이 화면이 나옵니다'; }
 function releaseInputs() {
@@ -4674,7 +4678,7 @@ $('pauseBtn').addEventListener('click', () => { if (G.state === 'play') setPause
 $('restart').addEventListener('click', () => { if (LINK) { goMainTitle(); return; } setPaused(false); requestLock(); startGame(); });
 const sensEl = $('sens'), sensVal = $('sensVal');
 sensEl.value = SENS; sensVal.textContent = SENS.toFixed(2);
-sensEl.addEventListener('input', () => { SENS = +sensEl.value; sensVal.textContent = SENS.toFixed(2); store.set('fh_room_sens', SENS); });
+sensEl.addEventListener('input', () => { SENS = +sensEl.value; sensVal.textContent = SENS.toFixed(2); store.set('room_sens', SENS); });
 $('pause').addEventListener('pointerdown', (e) => { if (e.target === $('pause')) resumePlay(); });
 
 document.addEventListener('mousemove', (e) => {
@@ -4777,9 +4781,9 @@ const stickEl = $('stick'), knobEl = stickEl.querySelector('.knob');
 const STICK_R = 56;
 function touchLook(dx, dy) {
   const f = (d) => d * TOUCH_SENS * SENS * (0.5 + 0.7 * Math.min(1, Math.abs(d) / 16));
-  const wide = clamp(640 / VW, 1, 1.6);   // 폭이 좁은 세로 화면일수록 좌우로 더 돈다
+  const wide = THREE.MathUtils.clamp(640 / VW, 1, 1.6);   // 폭이 좁은 세로 화면일수록 좌우로 더 돈다
   PL.yaw -= f(dx) * wide;
-  PL.pitch = clamp(PL.pitch - f(dy) * (1 + (wide - 1) * 0.4), -1.32, 1.32);
+  PL.pitch = THREE.MathUtils.clamp(PL.pitch - f(dy) * (1 + (wide - 1) * 0.4), -1.32, 1.32);
 }
 canvas.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse') return;
@@ -4793,7 +4797,7 @@ canvas.addEventListener('pointerdown', (e) => {
   } else if (TT.look === null) {
     TT.look = e.pointerId; TT.lx = e.clientX; TT.ly = e.clientY;
   } else return;
-  try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* 무시 */ }
+  try { canvas.setPointerCapture(e.pointerId); } catch { }
   e.preventDefault();
 });
 canvas.addEventListener('pointermove', (e) => {
@@ -4804,7 +4808,7 @@ canvas.addEventListener('pointermove', (e) => {
     knobEl.style.transform = `translate(${dx}px, ${dy}px)`;
     // 가운데 근처는 무시하고 부드럽게
     const len = Math.hypot(dx, dy), m = len / STICK_R, dead = 0.12;
-    const k = m < dead ? 0 : clamp((m - dead) / (1 - dead), 0, 1);
+    const k = m < dead ? 0 : THREE.MathUtils.clamp((m - dead) / (1 - dead), 0, 1);
     INPUT.stick.x = len ? dx / len * k : 0;
     INPUT.stick.z = len ? dy / len * k : 0;
     // 앞으로 끝까지 밀면 달리기
@@ -4825,7 +4829,7 @@ fireEl.addEventListener('pointerdown', (e) => {
   e.preventDefault(); e.stopPropagation();
   if (G.state !== 'play' || PAUSED) return;
   TT.fire = e.pointerId; TT.fx = e.clientX; TT.fy = e.clientY;
-  try { fireEl.setPointerCapture(e.pointerId); } catch (err) { /* 무시 */ }
+  try { fireEl.setPointerCapture(e.pointerId); } catch { }
   fireEl.classList.add('down');
   INPUT.fire = true; INPUT.trigger = true;
 });
@@ -4889,7 +4893,7 @@ function tick(dt) {
   ptTick(dt); growDecals(dt); flashTick(dt);
   applyCamera(dt);
   vmUpdate(dt);
-  const Lp = clamp(lfAtCPU(PL.x, PL.z) * 0.95 + 0.06 + FLASH.I * 0.45, 0.07, 1.3);
+  const Lp = THREE.MathUtils.clamp(lfAtCPU(PL.x, PL.z) * 0.95 + 0.06 + FLASH.I * 0.45, 0.07, 1.3);
   vmHemi.intensity = 1.5 * Lp; vmKey.intensity = 1.65 * Lp;
   hudTick(dt);
 }

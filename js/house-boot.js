@@ -1,22 +1,13 @@
 // Lightweight page bootstrap and load-failure notice.
 // 밖(원래 게임)에서 들어왔으면 시작 화면 대신 어두운 현관 앞에서 시작
+import { $ } from './utils.js';
+import Linker from './utils/Linker.js';
+
 (function () {
   'use strict';
 
-  var $ = (id) => document.getElementById(id);
-
-  function readLink() {
-    var raw = null;
-    try { raw = sessionStorage.getItem('fh_link'); } catch {}
-    if (!raw) {
-      var m = location.hash.match(/[#&]s=([^&]+)/);
-      if (m) raw = decodeURIComponent(m[1]);
-    }
-    return raw ? JSON.parse(raw) : null;
-  }
-
   try {
-    var v = readLink();
+    var v = new Linker().read();
     if (v && v.v === 1 && v.dir === 'in' && Date.now() - (Number(v.at) || 0) < 6 * 3600e3) {
       var title = $('title'), gate = $('gate'), fade = $('fade');
       if (title && gate && fade) {

@@ -1,20 +1,12 @@
 // Lightweight page bootstrap, offline check and load-failure notice.
 // 집(gosiwon.html)에서 막 나왔으면 시작 화면을 건너뛰고 하얀 화면에서 이어 간다
+import Linker from './utils/Linker.js';
+
 (function () {
   'use strict';
 
-  function readLink() {
-    var raw = null;
-    try { raw = sessionStorage.getItem('fh_link'); } catch { }
-    if (!raw) {
-      var m = location.hash.match(/[#&]s=([^&]+)/);
-      if (m) raw = decodeURIComponent(m[1]);
-    }
-    return raw ? JSON.parse(raw) : null;
-  }
-
   try {
-    var v = readLink();
+    var v = new Linker().read();
     var fresh = v && Date.now() - (Number(v.at) || 0) < 6 * 3600e3;
     if (v && v.v === 1 && v.dir === 'out' && fresh) document.documentElement.classList.add('linkout');
   } catch { }

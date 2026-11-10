@@ -1336,19 +1336,6 @@ body {
     font-size: clamp(40px, 15vh, 120px);
   }
 
-  #consoleBadge {
-    width: 64px;
-    bottom: calc(14px + var(--safe-b));
-  }
-
-  #consoleBadge span {
-    font-size: 8px;
-  }
-
-  #arcade .arcade-word {
-    font-size: 25px;
-  }
-
   #start {
     font-size: 20px;
     padding: 13px 26px 12px 34px;

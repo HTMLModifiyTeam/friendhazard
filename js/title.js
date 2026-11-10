@@ -1,12 +1,14 @@
 // Game runtime extracted from the original page.
 import * as THREE from 'three';
-import VOICE_DATA from './voice-data.js';
-import Linker from './links.js';
-import { $, clamp, lerp, rand, pick, TAU, rngChoice, approach, wrapAngle, angleApproach, Store } from './utils.js';
+import VOICE_DATA from './data/voices.js';
+import { CROWD_COLORS, introText } from './data/data.js';
+import Linker from './utils/Linker.js';
+import Store from './utils/Store.js';
+import { $, rand, pick, TAU, approach, wrapAngle, angleApproach, seeded } from './utils.js';
 import { easeOutCubic, easeInOutCubic, easeInQuad, easeInOutSine } from './eases.js'
 
 // ───────────────────────── 기본 도구 ─────────────────────────
-const store = new Store();
+const store = new Store("friendhazard");
 let IS_TOUCH = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) || ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
 
 const Link = new Linker();
@@ -74,12 +76,8 @@ const SUN_OFF = new THREE.Vector3(-6, 15, 10);
 
 // 윤곽선: 화면 픽셀 단위로 일정한 두께
 const OUTLINE = {
-  px: {
-    value: 2.6
-  },
-  res: {
-    value: new THREE.Vector2(1, 1)
-  }
+  px: { value: 2.6 },
+  res: { value: new THREE.Vector2(1, 1) }
 };
 
 let VW = 1, VH = 1;
@@ -102,7 +100,7 @@ onResize();
 // ───────────────────────── 소리 ─────────────────────────
 let ac = null;
 const A = {};
-let MUTED = !!store.get('fh_muted', false);
+let MUTED = !!store.get('muted', false);
 const VO = {}; // 이름 → AudioBuffer
 const activeVoices = new Set();
 
@@ -195,7 +193,7 @@ function audioWatch(dt) {
     try {
       const p = ac.resume();
       if (p && p.catch) p.catch(() => { });
-    } catch (e) { }
+    } catch { }
     return;
   }
   if (!A.tap) return;
@@ -218,12 +216,12 @@ function audioPoke() {
   try {
     const p = ac.resume();
     if (p && p.catch) p.catch(() => { });
-  } catch (e) { }
+  } catch { }
 }
 
 function setMuted(m) {
   MUTED = m;
-  store.set('fh_muted', m);
+  store.set('muted', m);
   $('mute').classList.toggle('muted', m);
   $('mute').setAttribute('aria-label', m ? '소리 켜기' : '소리 끄기');
   if (ac) {
@@ -255,8 +253,7 @@ function makeIR(sec, decay) {
 }
 
 function makeCurve(k) {
-  const n = 1024,
-    c = new Float32Array(n);
+  const n = 1024, c = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     const x = i / (n - 1) * 2 - 1;
     c[i] = Math.tanh(x * k) / Math.tanh(k);
@@ -272,9 +269,7 @@ async function decodeVoices() {
       if (!res.ok) throw new Error(res.status);
       const ab = await res.arrayBuffer();
       VO[k] = await ac.decodeAudioData(ab);
-    } catch (e) {
-      console.warn('Failed to load voice:', k, data[k].b, e);
-    }
+    } catch (e) { console.warn('Failed to load voice:', k, data[k].b, e); }
   }));
 }
 
@@ -320,7 +315,7 @@ function outChain(vol, pan, verb) {
   let tail = g;
   if (pan && Math.abs(pan) > 0.06 && ac.createStereoPanner) {
     const p = ac.createStereoPanner();
-    p.pan.value = clamp(pan, -1, 1);
+    p.pan.value = THREE.MathUtils.clamp(pan, -1, 1);
     g.connect(p);
     tail = p;
   }
@@ -1001,7 +996,7 @@ function playVoice(key, o = {}) {
   let tail = g;
   if (ac.createStereoPanner) {
     const p = ac.createStereoPanner();
-    p.pan.value = clamp(o.pan || 0, -1, 1);
+    p.pan.value = THREE.MathUtils.clamp(o.pan || 0, -1, 1);
     g.connect(p);
     tail = p;
   }
@@ -1020,7 +1015,7 @@ function playVoice(key, o = {}) {
     dur: buf.duration / rate,
     stopped: false,
     progress() {
-      return clamp((ac.currentTime - h.t0) / h.dur, 0, 1);
+      return THREE.MathUtils.clamp((ac.currentTime - h.t0) / h.dur, 0, 1);
     },
     stop(fast = 0.012) {
       if (h.stopped) return;
@@ -1180,9 +1175,7 @@ function renderMusicBuffer() {
   let off;
   try {
     off = new OAC(2, len, sr);
-  } catch (e) {
-    return;
-  }
+  } catch { return; }
   if (!off.suspend) return;
   musicRendering = true;
   // 녹음용 부품을 따로 만들어 두고, 음표를 짤 때만 잠깐 바꿔 끼운다
@@ -1213,7 +1206,7 @@ function renderMusicBuffer() {
     R.A.music.connect(off.destination); // 음악 버스(0.4)는 나중에 실시간에서 곱한다
     Object.assign(R.MU, musicBusBuild(R.A.music));
     swapOut();
-  } catch (e) {
+  } catch {
     if (save) swapOut();
     musicRendering = false;
     return;
@@ -3172,14 +3165,6 @@ const CROWD_GEO_LITE = (() => {
   };
 })();
 
-const CROWD_COLORS = {
-  shirt: ['#e0474f', '#f08a2c', '#efbd24', '#4fae4c', '#25a39d', '#3a7cd6', '#7a58d0', '#d1559c', '#8a8794', '#34456a', '#9c5530', '#2f2d3a', '#c95b2e', '#5b8f3a'],
-  pants: ['#2c3a5c', '#393a42', '#6a6e78', '#7a6a50', '#232630', '#4a5c7c'],
-  shoe: ['#f1f1f1', '#2a2a2e', '#c44a3a', '#6b7888', '#e7d9bf'],
-  hair: ['#1d181b', '#2b211b', '#3c2a1f', '#55392a', '#141414', '#4a3b33'],
-  skin: ['#f6d0b2', '#eec09c', '#e2ac88', '#f8dac4', '#d69f7c', '#f3c9a6'],
-};
-
 // 부위 정의: [이름, 지오메트리, 색 종류, 리그 노드]
 const PART_DEFS = [
   ['torso', 'torso', 'shirt', 'torso'],
@@ -4558,7 +4543,7 @@ function updateShells(dt) {
     if (s.y < 0.014 && s.vy < 0) {
       s.y = 0.014;
       const sp = -s.vy;
-      if (s.bounces < 3) sfxTink(clamp(sp / 3, 0.25, 1), clamp((s.x - CAMX) / 6, -1, 1));
+      if (s.bounces < 3) sfxTink(THREE.MathUtils.clamp(sp / 3, 0.25, 1), THREE.MathUtils.clamp((s.x - CAMX) / 6, -1, 1));
       s.bounces++;
       s.vy = sp * 0.38;
       s.vx *= 0.55;
@@ -4602,10 +4587,7 @@ const FLASHES = GUNS.map((gun) => {
   sp.visible = false;
   sp.renderOrder = 7;
   gun.add(sp);
-  return {
-    sp,
-    t: 0
-  };
+  return { sp, t: 0 };
 });
 SG.flash = new THREE.Sprite(new THREE.SpriteMaterial({
   map: flashTex,
@@ -4657,8 +4639,7 @@ function addTracer(ax, ay, az, bx, by, bz) {
   t.by = by;
   t.bz = bz;
 }
-const _dir = new THREE.Vector3(),
-  _zAxis = new THREE.Vector3(0, 0, 1);
+const _dir = new THREE.Vector3(), _zAxis = new THREE.Vector3(0, 0, 1);
 
 function updateTracers(dt) {
   for (let i = 0; i < TRACER_MAX; i++) {
@@ -4672,9 +4653,9 @@ function updateTracers(dt) {
     }
     const k = t.t / 0.07;
     // 앞쪽부터 사라지는 궤적
-    const sx = lerp(t.ax, t.bx, k * 0.7),
-      sy = lerp(t.ay, t.by, k * 0.7),
-      sz = lerp(t.az, t.bz, k * 0.7);
+    const sx = THREE.MathUtils.lerp(t.ax, t.bx, k * 0.7),
+      sy = THREE.MathUtils.lerp(t.ay, t.by, k * 0.7),
+      sz = THREE.MathUtils.lerp(t.az, t.bz, k * 0.7);
     _dir.set(t.bx - sx, t.by - sy, t.bz - sz);
     const len = _dir.length();
     _dir.divideScalar(len || 1);
@@ -4730,7 +4711,7 @@ function updateBursts(dt) {
       b.sp.visible = false;
       continue;
     }
-    const s = b.size * (k < 0.22 ? easeOutCubic(k / 0.22) * 1.15 : lerp(1.15, 1.0, (k - 0.22) / 0.78));
+    const s = b.size * (k < 0.22 ? easeOutCubic(k / 0.22) * 1.15 : THREE.MathUtils.lerp(1.15, 1.0, (k - 0.22) / 0.78));
     b.sp.scale.setScalar(s);
     b.sp.material.opacity = k < 0.6 ? 1 : 1 - (k - 0.6) / 0.4;
   }
@@ -4779,7 +4760,7 @@ function fxUpdate(dt) {
     const d = growing[i];
     d.t += dt;
     const k = easeOutCubic(d.t / d.dur);
-    d.s = lerp(d.size * 0.15, d.size, k);
+    d.s = THREE.MathUtils.lerp(d.size * 0.15, d.size, k);
     setDecal(d);
     if (d.t >= d.dur) growing.splice(i, 1);
   }
@@ -4914,7 +4895,7 @@ function makeCarePosterAtlas(existing) {
       g.textAlign = 'center';
       g.fillStyle = '#252d35';
       g.font = '900 43px "Noto Sans KR", "Malgun Gothic", sans-serif';
-      const arr = rngChoice(lines);
+      const arr = pick(lines);
       const arrIdx = lines.indexOf(arr);
       for (let j = 0; j < arr.length; j++) g.fillText(arr[j], 256, 266 + j * 75);
       // 두 사람 그림. 마지막 포스터에는 둘 사이를 가르는 단선이 인쇄되어 있다.
@@ -5515,8 +5496,7 @@ function houseCollide(o, r) {
     x1 = H.x + HW / 2 + 0.05,
     z0 = H.z - HD / 2 - 0.05,
     z1 = H.z + HD / 2 + 0.05;
-  const cx = clamp(o.x, x0, x1),
-    cz = clamp(o.z, z0, z1);
+  const cx = THREE.MathUtils.clamp(o.x, x0, x1), cz = THREE.MathUtils.clamp(o.z, z0, z1);
   let dx = o.x - cx,
     dz = o.z - cz,
     d2 = dx * dx + dz * dz;
@@ -5559,8 +5539,7 @@ function houseCollide(o, r) {
 function houseRayT(ox, oz, dx, dz) {
   const H = HOUSE;
   if (!H.on) return Infinity;
-  let t0 = -Infinity,
-    t1 = Infinity;
+  let t0 = -Infinity, t1 = Infinity;
   for (const [o, d, a, b] of [
     [ox, dx, H.x - HW / 2, H.x + HW / 2],
     [oz, dz, H.z - HD / 2, H.z + HD / 2]
@@ -5967,10 +5946,10 @@ function lookAtMe(p, o, w) {
     dist = Math.hypot(dx, dz) || 0.001;
   const headY = p.state === 'idle' ? 0.9 : 1.2;
   const rel = wrapAngle(Math.atan2(dx, dz) - p.yaw - o[P.SY]);
-  const hw = clamp(rel, -1.15, 1.15);
+  const hw = THREE.MathUtils.clamp(rel, -1.15, 1.15);
   const pitch = -Math.atan2(1.38 - headY, dist) - 0.12 - o[P.SX];
-  o[P.HW] = lerp(o[P.HW], hw, w);
-  o[P.HX] = lerp(o[P.HX], clamp(pitch, -1.0, 0.8), w);
+  o[P.HW] = THREE.MathUtils.lerp(o[P.HW], hw, w);
+  o[P.HX] = THREE.MathUtils.lerp(o[P.HX], THREE.MathUtils.clamp(pitch, -1.0, 0.8), w);
 }
 
 function poseIdle(p, t, o) {
@@ -6036,9 +6015,8 @@ function poseIdle(p, t, o) {
 function poseChase(p, t, o) {
   o.fill(0);
   const run = p.kind === 1 && p.state === 'chase';
-  const s = Math.sin(p.phase),
-    c = Math.cos(p.phase);
-  const g = clamp(p.spd / (run ? 2.8 : 1.3), 0, 1.15);
+  const s = Math.sin(p.phase), c = Math.cos(p.phase);
+  const g = THREE.MathUtils.clamp(p.spd / (run ? 2.8 : 1.3), 0, 1.15);
   const amp = (run ? 0.85 : 0.44) * g;
   const hic = Math.pow(Math.max(0, Math.sin(t * 5 + p.seed * 3)), 4);
   o[P.HY] = C.HIP_Y - Math.abs(c) * (run ? 0.045 : 0.02) * g - (run ? 0.035 : 0.012);
@@ -6063,13 +6041,13 @@ function poseChase(p, t, o) {
     const r = p.reach,
       hang = -o[P.SX] + 0.1,
       sw = s * 0.2 * g;
-    o[P.LSX] = lerp(hang + sw, -1.72 + tr, r);
-    o[P.RSX] = lerp(hang - sw, -1.66 - tr, r);
-    o[P.LSZ] = lerp(0.05, 0.13, r);
+    o[P.LSX] = THREE.MathUtils.lerp(hang + sw, -1.72 + tr, r);
+    o[P.RSX] = THREE.MathUtils.lerp(hang - sw, -1.66 - tr, r);
+    o[P.LSZ] = THREE.MathUtils.lerp(0.05, 0.13, r);
     o[P.RSZ] = -o[P.LSZ];
-    o[P.LSY] = lerp(0, -0.12, r);
+    o[P.LSY] = THREE.MathUtils.lerp(0, -0.12, r);
     o[P.RSY] = -o[P.LSY];
-    o[P.LEX] = lerp(-0.12, -0.28, r);
+    o[P.LEX] = THREE.MathUtils.lerp(-0.12, -0.28, r);
     o[P.REX] = o[P.LEX];
   }
   lookAtMe(p, o, 1);
@@ -6185,7 +6163,7 @@ function makeCorpse(back) {
 
 function poseDying(p, o) {
   o.set(p.corpse);
-  const k = clamp(p.dieT / p.fallT, 0, 1);
+  const k = THREE.MathUtils.clamp(p.dieT / p.fallT, 0, 1);
   let a = easeInQuad(k) * Math.PI / 2;
   if (p.dieT > p.fallT) {
     const x = p.dieT - p.fallT;
@@ -6199,7 +6177,7 @@ function poseDying(p, o) {
   o[P.LSX] += -1.3 * fl;
   o[P.RSX] += -1.1 * fl;
   o[P.HX] += (p.back ? -0.6 : 0.5) * fl;
-  if (p.how === 'stab') o[P.HY] = lerp(C.HIP_Y, C.HIP_Y - 0.15, fl);
+  if (p.how === 'stab') o[P.HY] = THREE.MathUtils.lerp(C.HIP_Y, C.HIP_Y - 0.15, fl);
 }
 
 function computePose(p, t, o) {
@@ -6211,7 +6189,7 @@ function computePose(p, t, o) {
       poseIdle(p, t, p.tmp);
       poseChase(p, t, o);
       const k = easeInOutSine(p.rise);
-      for (let i = 0; i < NPOSE; i++) o[i] = lerp(p.tmp[i], o[i], k);
+      for (let i = 0; i < NPOSE; i++) o[i] = THREE.MathUtils.lerp(p.tmp[i], o[i], k);
       break;
     }
     case 'chase':
@@ -6223,7 +6201,7 @@ function computePose(p, t, o) {
       if (p.clingT < 0.25) {
         poseChase(p, t, p.tmp);
         const k = easeOutCubic(p.clingT / 0.25);
-        for (let i = 0; i < NPOSE; i++) o[i] = lerp(p.tmp[i], o[i], k);
+        for (let i = 0; i < NPOSE; i++) o[i] = THREE.MathUtils.lerp(p.tmp[i], o[i], k);
       }
       break;
     }
@@ -6378,8 +6356,8 @@ function crowdSim(dt) {
       const H = p.host,
         s = SLOTS[p.slot],
         k = easeOutCubic(p.clingT / 0.22);
-      p.x = H.x + lerp(p.cx0, s.x, k);
-      p.z = H.z + lerp(p.cz0, s.z, k);
+      p.x = H.x + THREE.MathUtils.lerp(p.cx0, s.x, k);
+      p.z = H.z + THREE.MathUtils.lerp(p.cz0, s.z, k);
       if (HOUSE.on) houseCollide(p, 0.22);
       p.yaw = angleApproach(p.yaw, Math.atan2(-s.x, -s.z), 14, dt);
       speechTick(p, dt, H === ME ? 0.5 : Math.hypot(ME.x - p.x, ME.z - p.z));
@@ -6480,7 +6458,7 @@ function tryCling(p, H) {
     if (!G.stabbedOnce) $('weapon').classList.add('pulse');
   } else {
     const dm = Math.hypot(ME.x - p.x, ME.z - p.z);
-    if (dm < 12) sfxGrab(screenPan(p.x, p.z), clamp(1.1 - dm * 0.08, 0.2, 0.7));
+    if (dm < 12) sfxGrab(screenPan(p.x, p.z), THREE.MathUtils.clamp(1.1 - dm * 0.08, 0.2, 0.7));
   }
 }
 
@@ -6504,7 +6482,7 @@ function speechTick(p, dt, d) {
   p.speakCD = cling ? rand(2.4, 4.8) : rand(1.5, 4.0) * (d > 7 ? 1.5 : 1);
   if (p.vo && !p.vo.stopped) return;
   if (d > 14 || voicesPlaying() >= MAXV) return;
-  const vol = cling && mine ? 0.5 : clamp(1.2 - d * 0.075, 0.28, 1) * (cling ? 0.7 : 1);
+  const vol = cling && mine ? 0.5 : THREE.MathUtils.clamp(1.2 - d * 0.075, 0.28, 1) * (cling ? 0.7 : 1);
   const pan = screenPan(p.x, p.z);
   const key = cling ? p.voiceKey.replace(/^g_/, 'f_') : p.voiceKey;
   const h = playVoice(VO[key] ? key : p.voiceKey, {
@@ -6645,32 +6623,32 @@ function crowdSocialPose(p, o) {
   if (!socialCrowdActive(p)) return;
   if (p.socialFriend) {
     const f = p.socialFriend,
-      w = Math.min(clamp(f.t / 0.12, 0, 1), clamp((1.05 - f.t) / 0.15, 0, 1));
-    const yaw = clamp(wrapAngle(Math.atan2(f.x - p.x, f.z - p.z) - p.yaw - o[P.SY]), -1.55, 1.55);
-    const pitch = clamp(-Math.atan2(f.y - p.hy, Math.hypot(f.x - p.hx, f.z - p.hz) || 0.001) - o[P.SX], -0.8, 0.5);
-    o[P.HW] = lerp(o[P.HW], yaw, w);
-    o[P.HX] = lerp(o[P.HX], pitch, w);
+      w = Math.min(THREE.MathUtils.clamp(f.t / 0.12, 0, 1), THREE.MathUtils.clamp((1.05 - f.t) / 0.15, 0, 1));
+    const yaw = THREE.MathUtils.clamp(wrapAngle(Math.atan2(f.x - p.x, f.z - p.z) - p.yaw - o[P.SY]), -1.55, 1.55);
+    const pitch = THREE.MathUtils.clamp(-Math.atan2(f.y - p.hy, Math.hypot(f.x - p.hx, f.z - p.hz) || 0.001) - o[P.SX], -0.8, 0.5);
+    o[P.HW] = THREE.MathUtils.lerp(o[P.HW], yaw, w);
+    o[P.HX] = THREE.MathUtils.lerp(o[P.HX], pitch, w);
     o[P.HZ] *= 1 - w;
     return;
   }
   const pair = p.social;
   if (!pair) {
-    if (p.socialReturn > 0) lookAtMe(p, o, clamp(p.socialReturn / 0.2, 0, 1));
+    if (p.socialReturn > 0) lookAtMe(p, o, THREE.MathUtils.clamp(p.socialReturn / 0.2, 0, 1));
     return;
   }
   const other = pair.a === p ? pair.b : pair.a;
   const sign = pair.a === p ? pair.signA : pair.signB;
   const t = pair.t;
-  const toward = clamp(wrapAngle(Math.atan2(other.x - p.x, other.z - p.z) - p.yaw - o[P.SY]), -1.45, 1.45);
+  const toward = THREE.MathUtils.clamp(wrapAngle(Math.atan2(other.x - p.x, other.z - p.z) - p.yaw - o[P.SY]), -1.45, 1.45);
   const away = -sign * 1.3;
-  const turn = easeOutCubic(clamp((t - 1.0) / 0.2, 0, 1));
-  const enter = easeOutCubic(clamp(t / 0.2, 0, 1));
-  const back = easeInOutSine(clamp((t - 1.6) / 0.4, 0, 1));
+  const turn = easeOutCubic(THREE.MathUtils.clamp((t - 1.0) / 0.2, 0, 1));
+  const enter = easeOutCubic(THREE.MathUtils.clamp(t / 0.2, 0, 1));
+  const back = easeInOutSine(THREE.MathUtils.clamp((t - 1.6) / 0.4, 0, 1));
   // 목만 움직인다. 상대 얼굴을 위아래로 천천히 훑고(0.25~1.0초), 두 사람은 같은 순간 고개를 홱 돌린다(1.0초). 2초에 다시 나를 본다.
-  const scan = lerp(-0.18, 0.18, clamp((t - 0.25) / 0.75, 0, 1));
+  const scan = THREE.MathUtils.lerp(-0.18, 0.18, THREE.MathUtils.clamp((t - 0.25) / 0.75, 0, 1));
   if (back > 0) lookAtMe(p, o, 1);
-  o[P.HW] = lerp(o[P.HW], lerp(toward, away, turn), enter * (1 - back));
-  o[P.HX] = lerp(o[P.HX], lerp(scan, -0.02, turn), enter * (1 - back));
+  o[P.HW] = THREE.MathUtils.lerp(o[P.HW], THREE.MathUtils.lerp(toward, away, turn), enter * (1 - back));
+  o[P.HX] = THREE.MathUtils.lerp(o[P.HX], THREE.MathUtils.lerp(scan, -0.02, turn), enter * (1 - back));
   o[P.HZ] *= 1 - enter * (1 - back);
 }
 
@@ -6709,7 +6687,7 @@ function noticeFriendship() {
 function spawnRingPos(angle) {
   // 화면 위쪽(먼 쪽)은 하얀 안개 속에서 나타나고, 옆·아래는 화면 밖에서 들어온다
   const north = Math.max(0, Math.cos(angle));
-  const r = lerp(10.5, 19, north * north);
+  const r = THREE.MathUtils.lerp(10.5, 19, north * north);
   return {
     x: ME.x + Math.sin(angle) * r,
     z: ME.z - Math.cos(angle) * r
@@ -6747,7 +6725,7 @@ function waveNow(T) {
 function spawnRing(n0) {
   const n = Math.round(n0 * (1 + 0.2 * squadN())),
     a0 = rand(0, TAU); // 친구 몫만큼만 더 (친구를 구하자마자 밀리지 않게)
-  const near = lerp(14, 11.5, Math.min(1, overT() / 45));
+  const near = THREE.MathUtils.lerp(14, 11.5, Math.min(1, overT() / 45));
   for (let k = 0; k < n; k++) {
     if (aliveCount >= maxAlive()) break;
     const a = a0 + k / n * TAU + rand(-0.12, 0.12),
@@ -6935,7 +6913,7 @@ function meSim(dt) {
   const mul = SPEED_MUL[Math.min(ME.clingers.length, SPEED_MUL.length - 1)];
   // 사격 중에도 방향을 바꿀 수 있지만, 러너를 따돌리려면 공격을 놓고 달려야 한다.
   ME.aimStance = approach(ME.aimStance || 0, G.firing && G.ctrl && !ME.clingers.length ? 1 : 0, 10, dt);
-  const sp = G.ctrl ? ME.speed * eff * mul * lerp(1, 0.45, ME.aimStance) : 0;
+  const sp = G.ctrl ? ME.speed * eff * mul * THREE.MathUtils.lerp(1, 0.45, ME.aimStance) : 0;
   ME.vx = approach(ME.vx, dx * sp, 9, dt);
   ME.vz = approach(ME.vz, dz * sp, 9, dt);
   ME.x += ME.vx * dt;
@@ -6952,7 +6930,7 @@ function meSim(dt) {
   }
   const v = Math.hypot(ME.vx, ME.vz);
   ME.phase += v * dt / 0.6 * Math.PI;
-  ME.walk = approach(ME.walk, clamp(v / 2.4, 0, 1), 8, dt);
+  ME.walk = approach(ME.walk, THREE.MathUtils.clamp(v / 2.4, 0, 1), 8, dt);
   for (const h of [0, 1]) {
     ME.recoil[h] = Math.max(0, ME.recoil[h] - dt * 8);
     if (G.t - ME.lastShot[h] > 0.6) ME.aim[h] = approach(ME.aim[h], 0, 5, dt);
@@ -6962,7 +6940,7 @@ function meSim(dt) {
   const lastH = ME.lastShot[0] > ME.lastShot[1] ? 0 : 1;
   if (G.t - ME.lastShot[lastH] < 0.6) {
     const ap = ME.aimPt[lastH];
-    want = clamp(Math.atan2(ap.x - ME.x, ap.z - ME.z), -0.45, 0.45);
+    want = THREE.MathUtils.clamp(Math.atan2(ap.x - ME.x, ap.z - ME.z), -0.45, 0.45);
     if (Math.abs(Math.atan2(ap.x - ME.x, ap.z - ME.z)) > 2.2) want = 0;
   }
   ME.spineYaw = approach(ME.spineYaw, want, 6, dt);
@@ -6993,7 +6971,7 @@ function aimArm(h, target, blend, lift, elbow, raw) {
   _f.copy(target).sub(_sp);
   _f.normalize();
   // 등 뒤를 쏠 때는 팔을 어깨 너머로 들어 올려 보이게
-  const behind = raw ? 0 : clamp(-(_f.z) - 0.15, 0, 1);
+  const behind = raw ? 0 : THREE.MathUtils.clamp(-(_f.z) - 0.15, 0, 1);
   _f.y += lift + behind * 1.0;
   _f.x += behind * 0.55 * (h === 0 ? 1 : -1);
   _f.normalize();
@@ -7064,7 +7042,7 @@ function meAnimate(dt) {
       aimArm(h, f.pt, f.blend, 0, -0.25);
     } else if (stabbing) {
       const st = ME.stab,
-        k = clamp(st.t / 0.2, 0, 1);
+        k = THREE.MathUtils.clamp(st.t / 0.2, 0, 1);
       const ext = Math.sin(Math.min(1, k * 1.6) * Math.PI * 0.5);
       const back = 1 - Math.sin(k * Math.PI);
       const tp = st.target;
@@ -7090,7 +7068,7 @@ function meAnimate(dt) {
 function meSparkles(dt) {
   // 반짝이
   const camD = camera.position.distanceTo(MR.neck.getWorldPosition(_v2));
-  const base = lerp(0.06, 0.17, clamp((camD - 1) / 18, 0, 1));
+  const base = THREE.MathUtils.lerp(0.06, 0.17, THREE.MathUtils.clamp((camD - 1) / 18, 0, 1));
   SPARKS.forEach((sp, k) => {
     const tw = 0.75 + 0.35 * Math.sin(G.t * 5.5 + k * 2.1) + 0.25 * Math.max(0, Math.sin(G.t * 1.7 + k)) ** 8;
     sp.scale.setScalar(base * tw);
@@ -7099,7 +7077,7 @@ function meSparkles(dt) {
   if (BIG_SPARK.visible) {
     BIG_SPARK.userData.t += dt;
     const k = BIG_SPARK.userData.t / 0.7;
-    BIG_SPARK.scale.setScalar(lerp(0.05, 0.55, Math.sin(clamp(k, 0, 1) * Math.PI)) * (camD < 4 ? 1 : 2.4));
+    BIG_SPARK.scale.setScalar(THREE.MathUtils.lerp(0.05, 0.55, Math.sin(THREE.MathUtils.clamp(k, 0, 1) * Math.PI)) * (camD < 4 ? 1 : 2.4));
     BIG_SPARK.material.rotation = k * 1.4;
     if (k >= 1) BIG_SPARK.visible = false;
   }
@@ -7446,7 +7424,7 @@ function animateItems(dt) {
       r.m.visible = false;
       continue;
     }
-    r.m.scale.setScalar(lerp(.12, 1.35, easeOutCubic(k)));
+    r.m.scale.setScalar(THREE.MathUtils.lerp(.12, 1.35, easeOutCubic(k)));
     r.m.material.opacity = .85 * (1 - k);
   }
 }
@@ -7490,7 +7468,7 @@ function fireRay(mz, dx, dz, maxT, pierce, impact, splash, shotgun) {
     }
   }
   if (pierce) endT = maxT;
-  addTracer(mz.x, mz.y, mz.z, mz.x + dx * endT, lerp(mz.y, .86, .85), mz.z + dz * endT);
+  addTracer(mz.x, mz.y, mz.z, mz.x + dx * endT, THREE.MathUtils.lerp(mz.y, .86, .85), mz.z + dz * endT);
 }
 
 function weaponDown() {
@@ -7576,7 +7554,7 @@ function shoot(forced) {
   const splash = {
     done: false
   },
-    pan = clamp((mz.x - CAMX) / 5, -1, 1);
+    pan = THREE.MathUtils.clamp((mz.x - CAMX) / 5, -1, 1);
   // 중앙 탄환부터, 같은 상대는 한 번만. 각 탄환은 가까운 명중부터 처리한다.
   fireRay(mz, dx, dz, RANGE + 2, pierce, impact, splash, spread);
   if (spread) {
@@ -7635,7 +7613,7 @@ function kill(p, dx, dz, how, by, quiet) {
   }
   const hy = how === 'stab' ? 0.85 : rand(0.78, 1.25);
   const far = Math.hypot(p.x - ME.x, p.z - ME.z);
-  const vfar = clamp(1.25 - far * 0.06, 0.35, 1);
+  const vfar = THREE.MathUtils.clamp(1.25 - far * 0.06, 0.35, 1);
   bloodBurst(p.x - dx * 0.1, hy, p.z - dz * 0.1, dx, dz, how === 'stab' ? 18 : bat ? 12 : 16, how === 'stab' ? 0.7 : 1);
   if (how === 'shot') bloodSpurt(p.x + dx * 0.15, hy, p.z + dz * 0.15, dx, 0.2, dz, 8);
   addDecal(p.x + dx * rand(0.4, 1.1), p.z + dz * rand(0.4, 1.1), rand(0.7, 1.2), 2, Math.atan2(dx, dz) - Math.PI / 2 + rand(-0.3, 0.3));
@@ -7748,7 +7726,7 @@ function shootShotgunOut(ax, ay, az) {
       n++;
       endT = hits[j].t;
     }
-    if (endT > 1.1) addTracer(mz.x, mz.y, mz.z, ME.x + rx * endT, lerp(mz.y, 0.86, 0.85), ME.z + rz * endT);
+    if (endT > 1.1) addTracer(mz.x, mz.y, mz.z, ME.x + rx * endT, THREE.MathUtils.lerp(mz.y, 0.86, 0.85), ME.z + rz * endT);
   }
   SG.flash.visible = true;
   SG.flashT = 0.07;
@@ -7756,7 +7734,7 @@ function shootShotgunOut(ax, ay, az) {
   if (!GAME_MOD.infiniteAmmo) SG.shells--;
   if (!GAME_MOD.auto) SG.cd = SG_CD;
   SG.pumpT = 0;
-  if (!GAME_MOD.silencer) sfxShotgunOut(clamp((mz.x - CAMX) / 5, -1, 1));
+  if (!GAME_MOD.silencer) sfxShotgunOut(THREE.MathUtils.clamp((mz.x - CAMX) / 5, -1, 1));
   if (GAME_MOD.infiniteAmmo || SG.shells > 0) {
     sfxPumpOut(0.16);
     SG.ejectT = 0.2;
@@ -7843,8 +7821,8 @@ function sgAnimate(dt) {
     if (!f || f.t >= 1) continue;
     f.t = Math.min(1, f.t + dt / 0.3);
     const e = easeInQuad(f.t);
-    g.position.y = lerp(f.y0, 0.045, e);
-    g.rotation.z = lerp(f.r0, Math.PI / 2, e);
+    g.position.y = THREE.MathUtils.lerp(f.y0, 0.045, e);
+    g.rotation.z = THREE.MathUtils.lerp(f.r0, Math.PI / 2, e);
   }
 }
 
@@ -7946,7 +7924,7 @@ const CAM_PITCH = THREE.MathUtils.degToRad(35);
 function camDist() {
   const a = VW / VH,
     t = Math.tan(THREE.MathUtils.degToRad(36 / 2));
-  return clamp(Math.max(2.25 / (t * a), 10.8), 9.5, 16);
+  return THREE.MathUtils.clamp(Math.max(2.25 / (t * a), 10.8), 9.5, 16);
 }
 
 function camGameTarget(pos, look) {
@@ -7970,8 +7948,8 @@ function camCloseTarget(pos, look) {
 
 function camEndTarget(pos, look, k) {
   look.set(ME.x, 1.18, ME.z);
-  const back = VW / VH < 0.8 ? lerp(3.3, 2.5, k) : lerp(2.7, 2.0, k);
-  pos.set(ME.x + lerp(0.5, 0.25, k), lerp(1.55, 1.42, k), ME.z + back);
+  const back = VW / VH < 0.8 ? THREE.MathUtils.lerp(3.3, 2.5, k) : THREE.MathUtils.lerp(2.7, 2.0, k);
+  pos.set(ME.x + THREE.MathUtils.lerp(0.5, 0.25, k), THREE.MathUtils.lerp(1.55, 1.42, k), ME.z + back);
 }
 const _cp = new THREE.Vector3(),
   _cl = new THREE.Vector3(),
@@ -7999,7 +7977,7 @@ function camUpdate(dt) {
     camGameTarget(_cp2, _cl2);
     CAM.pos.lerpVectors(_cp, _cp2, k);
     CAM.look.lerpVectors(_cl, _cl2, k);
-    fov = lerp(30, 36, k);
+    fov = THREE.MathUtils.lerp(30, 36, k);
     if (CAM.t >= CAM.dur) CAM.mode = 'game';
   } else if (CAM.mode === 'manual') {
     fov = CAM.fov;
@@ -8012,10 +7990,10 @@ function camUpdate(dt) {
     fov = POSTER.fov;
   } else if (CAM.mode === 'end') {
     const k = easeInOutCubic(CAM.t / CAM.dur);
-    camEndTarget(_cp2, _cl2, easeInOutSine(clamp((CAM.t - CAM.dur) / 6, 0, 1)));
+    camEndTarget(_cp2, _cl2, easeInOutSine(THREE.MathUtils.clamp((CAM.t - CAM.dur) / 6, 0, 1)));
     CAM.pos.lerpVectors(CAM.from.pos, _cp2, k);
     CAM.look.lerpVectors(CAM.from.look, _cl2, k);
-    fov = lerp(36, 32, k);
+    fov = THREE.MathUtils.lerp(36, 32, k);
   }
   if (Math.abs(camera.fov - fov) > 0.01) {
     camera.fov = fov;
@@ -8073,7 +8051,7 @@ function onScreen(x, y, z) {
 
 function screenPan(x, z) {
   toScreen(x, 1, z, _sc);
-  return clamp((_sc.x / VW) * 2 - 1, -1, 1) * 0.8;
+  return THREE.MathUtils.clamp((_sc.x / VW) * 2 - 1, -1, 1) * 0.8;
 }
 
 // ───────────────────────── 동료: 정신건강 2급·3급 ─────────────────────────
@@ -8367,7 +8345,7 @@ function resetAllies() {
   G.helped = 0;
 }
 const allyOn = (a) => a.state !== 'off';
-const allyVol = (a) => clamp(1.25 - Math.hypot(a.x - ME.x, a.z - ME.z) * 0.07, 0.3, 0.85);
+const allyVol = (a) => THREE.MathUtils.clamp(1.25 - Math.hypot(a.x - ME.x, a.z - ME.z) * 0.07, 0.3, 0.85);
 
 // ── 등장: 사람들에게 둘러싸여 붙잡힌 채로 ──
 function allySpawnUpdate() {
@@ -8466,7 +8444,7 @@ function fiveSim(a, dt) {
   const m = ME.five;
   m.pt.set((ME.x + a.x) / 2, 1.6, (ME.z + a.z) / 2 + 0.08);
   const k = f.t < 0.26 ? easeOutCubic(f.t / 0.26) : f.t < 0.48 ? 1 : 1 - easeInOutSine((f.t - 0.48) / 0.36);
-  m.blend = f.k = clamp(k, 0, 1);
+  m.blend = f.k = THREE.MathUtils.clamp(k, 0, 1);
   if (!f.contact && f.t >= 0.26) {
     f.contact = true;
     sfxClap();
@@ -8689,11 +8667,7 @@ function allySim(dt) {
           spd = 4.8;
           face = Math.atan2(hc.x - a.x, hc.z - a.z);
           if (Math.hypot(hc.x - a.x, hc.z - a.z) < 0.78) {
-            a.stab = {
-              t: 0,
-              target: hc,
-              done: false
-            };
+            a.stab = { t: 0, target: hc, done: false };
             a.helpCD = GUARD_HELP_CD;
             sfxStab(screenPan(a.x, a.z), allyVol(a) * 0.8);
           }
@@ -8773,7 +8747,7 @@ function allySim(dt) {
     }
     a.spd = a.state === 'five' ? 0 : Math.hypot(a.vx, a.vz);
     a.phase += a.spd * dt / 0.6 * Math.PI;
-    a.walk = approach(a.walk, clamp(a.spd / 2.6, 0, 1), 8, dt);
+    a.walk = approach(a.walk, THREE.MathUtils.clamp(a.spd / 2.6, 0, 1), 8, dt);
     // 자리를 지키고 서 있을 때는 방망이를 들고 경계 자세
     const guarding = a.state === 'fight' && !a.target && !a.helping && !a.swing && !a.stab && !a.clingers.length;
     a.ready = approach(a.ready, guarding ? 1 : 0, 6, dt);
@@ -8800,7 +8774,7 @@ function armToward(a, left, x, y, z) {
   const dlx = dx * cs - dz * sn,
     dlz = dx * sn + dz * cs;
   const L = Math.hypot(dlx, dy, dlz) || 1;
-  _aw[0] = -Math.acos(clamp(-dy / L, -1, 1));
+  _aw[0] = -Math.acos(THREE.MathUtils.clamp(-dy / L, -1, 1));
   _aw[1] = Math.atan2(dlx, dlz);
   return _aw;
 }
@@ -8856,12 +8830,12 @@ function allyPose(a, t, o) {
   }
   if (a.ready > 0.01) {
     const k = a.ready * (1 - a.walk * 0.6);
-    o[P.RSX] = lerp(o[P.RSX], -0.85, k);
-    o[P.RSZ] = lerp(o[P.RSZ], -0.5, k);
-    o[P.REX] = lerp(o[P.REX], -1.55, k);
-    o[P.LSX] = lerp(o[P.LSX], -0.55, k);
-    o[P.LSZ] = lerp(o[P.LSZ], 0.3, k);
-    o[P.LEX] = lerp(o[P.LEX], -1.1, k);
+    o[P.RSX] = THREE.MathUtils.lerp(o[P.RSX], -0.85, k);
+    o[P.RSZ] = THREE.MathUtils.lerp(o[P.RSZ], -0.5, k);
+    o[P.REX] = THREE.MathUtils.lerp(o[P.REX], -1.55, k);
+    o[P.LSX] = THREE.MathUtils.lerp(o[P.LSX], -0.55, k);
+    o[P.LSZ] = THREE.MathUtils.lerp(o[P.LSZ], 0.3, k);
+    o[P.LEX] = THREE.MathUtils.lerp(o[P.LEX], -1.1, k);
     o[P.HY] -= 0.045 * k;
     o[P.LKX] += 0.2 * k;
     o[P.RKX] += 0.2 * k;
@@ -8885,11 +8859,11 @@ function allyPose(a, t, o) {
     o[P.LEX] = -0.3;
   }
   if (a.swing) {
-    const k = clamp(a.swing.t / 0.44, 0, 1);
+    const k = THREE.MathUtils.clamp(a.swing.t / 0.44, 0, 1);
     let sw;
     if (k < 0.3) sw = -easeOutCubic(k / 0.3);
     else if (k < 0.55) sw = -1 + 2.15 * easeInQuad((k - 0.3) / 0.25);
-    else sw = lerp(1.15, 0.6, easeInOutSine((k - 0.55) / 0.45));
+    else sw = THREE.MathUtils.lerp(1.15, 0.6, easeInOutSine((k - 0.55) / 0.45));
     o[P.RSX] = -1.4;
     o[P.RSZ] = 0;
     o[P.RSY] = sw * 1.25 - 0.1;
@@ -8906,14 +8880,14 @@ function allyPose(a, t, o) {
     o[P.RHX] -= 0.1;
   }
   if (a.stab) {
-    const k = clamp(a.stab.t / 0.28, 0, 1);
+    const k = THREE.MathUtils.clamp(a.stab.t / 0.28, 0, 1);
     const ext = Math.sin(Math.min(1, k * 1.7) * Math.PI * 0.5) * (1 - Math.max(0, k - 0.6) / 0.4);
     const tp = a.stab.target;
     const r = armToward(a, true, tp.tx, tp.ty - 0.05, tp.tz);
-    o[P.LSX] = lerp(-0.6, r[0], ext);
-    o[P.LSY] = lerp(0, r[1], ext);
+    o[P.LSX] = THREE.MathUtils.lerp(-0.6, r[0], ext);
+    o[P.LSY] = THREE.MathUtils.lerp(0, r[1], ext);
     o[P.LSZ] = 0;
-    o[P.LEX] = lerp(-1.6, -0.1, ext);
+    o[P.LEX] = THREE.MathUtils.lerp(-1.6, -0.1, ext);
     o[P.SY] = 0.25 * ext;
     o[P.SX] = 0.2;
   }
@@ -8924,15 +8898,15 @@ function allyPose(a, t, o) {
       L = f.hand === 'L';
     const r = armToward(a, L, pt.x, pt.y, pt.z);
     if (L) {
-      o[P.LSX] = lerp(o[P.LSX], r[0], k);
-      o[P.LSY] = lerp(0, r[1], k);
-      o[P.LSZ] = lerp(o[P.LSZ], 0, k);
-      o[P.LEX] = lerp(o[P.LEX], -0.12, k);
+      o[P.LSX] = THREE.MathUtils.lerp(o[P.LSX], r[0], k);
+      o[P.LSY] = THREE.MathUtils.lerp(0, r[1], k);
+      o[P.LSZ] = THREE.MathUtils.lerp(o[P.LSZ], 0, k);
+      o[P.LEX] = THREE.MathUtils.lerp(o[P.LEX], -0.12, k);
     } else {
-      o[P.RSX] = lerp(o[P.RSX], r[0], k);
-      o[P.RSY] = lerp(0, r[1], k);
-      o[P.RSZ] = lerp(o[P.RSZ], 0, k);
-      o[P.REX] = lerp(o[P.REX], -0.12, k);
+      o[P.RSX] = THREE.MathUtils.lerp(o[P.RSX], r[0], k);
+      o[P.RSY] = THREE.MathUtils.lerp(0, r[1], k);
+      o[P.RSZ] = THREE.MathUtils.lerp(o[P.RSZ], 0, k);
+      o[P.REX] = THREE.MathUtils.lerp(o[P.REX], -0.12, k);
     }
     o[P.SZ] = (L ? -1 : 1) * 0.1 * k;
     o[P.SX] = 0.02;
@@ -8967,7 +8941,7 @@ function allyAnimate(a, dt) {
   a.hz = _hv.z;
   const sps = ALLY_SPARKS[a.k];
   const camD = camera.position.distanceTo(_hv);
-  const base = lerp(0.06, 0.17, clamp((camD - 1) / 18, 0, 1)) * (a.grade === 2 ? 0.62 : 0.45);
+  const base = THREE.MathUtils.lerp(0.06, 0.17, THREE.MathUtils.clamp((camD - 1) / 18, 0, 1)) * (a.grade === 2 ? 0.62 : 0.45);
   sps.forEach((sp, i) => {
     const sx = sps.length === 2 ? (i ? 1 : -1) : 1;
     _hv.set(sx * 0.104 - 0.012, M.HEAD_UP + 0.028, M.HEAD_R + 0.03).applyMatrix4(HR.neck.matrixWorld);
@@ -9003,8 +8977,7 @@ function pleaBubbleTick(p, dt, d) {
   // 말풍선은 음성 슬롯이 차 있어도 표시하되, 게임의 난수는 소비하지 않는다.
   p.pleaCD = Math.max(0, (p.pleaCD || 0) - dt);
   if (p.pleaCD > 0 || d > 14 || (p.bubble && !p.bubble.ending)) return;
-  const cling = p.state === 'cling',
-    mine = p.host === ME;
+  const cling = p.state === 'cling', mine = p.host === ME;
   if (cling && mine && !p.socialPlea) return;
   if (!onScreen(p.hx, p.hy + 0.18, p.hz) || _sc.y < 56 || _sc.y > VH - 55 || _sc.x < 4 || _sc.x > VW - 4) return;
   if (houseHides(p.hx, p.hy + 0.18, p.hz)) return;
@@ -9081,15 +9054,13 @@ function updateBubbles(dt) {
         continue;
       }
     } else {
-      const prog = b.voice ? b.voice.progress() : clamp(b.t / b.dur, 0, 1);
-      const n = b.instant ? b.text.length : clamp(Math.floor(prog * 1.12 * b.text.length) + 1, 1, b.text.length);
+      const prog = b.voice ? b.voice.progress() : THREE.MathUtils.clamp(b.t / b.dur, 0, 1);
+      const n = b.instant ? b.text.length : THREE.MathUtils.clamp(Math.floor(prog * 1.12 * b.text.length) + 1, 1, b.text.length);
       if (n !== b.shown) {
         b.shown = n;
         b.el.textContent = b.text.slice(0, n);
       }
-      if (b.t > b.dur + 0.45 || (b.voice && b.voice.stopped && b.t > 0.2 && b.shown >= b.text.length)) {
-        fadeBubble(b);
-      }
+      if (b.t > b.dur + 0.45 || (b.voice && b.voice.stopped && b.t > 0.2 && b.shown >= b.text.length)) fadeBubble(b);
     }
     const o = b.owner;
     if (!o) continue;
@@ -9110,7 +9081,7 @@ function updateBubbles(dt) {
       b.wcache = b.shown;
       b.hw = b.el.offsetWidth / 2;
     }
-    const bx = clamp(_bs.x, b.hw + 6, VW - b.hw - 6);
+    const bx = THREE.MathUtils.clamp(_bs.x, b.hw + 6, VW - b.hw - 6);
     const by = Math.max(_bs.y, b.instant ? b.el.offsetHeight + 14 : 44);
     b.wrap.style.transform = `translate3d(${bx.toFixed(1)}px, ${by.toFixed(1)}px, 0)`;
   }
@@ -9160,9 +9131,7 @@ function hideToast() {
   toastEl.classList.remove('show');
 }
 // 알림을 누르면 사라짐. 누른 손가락이 밑의 소리 버튼까지 누르지 않게 click에서 닫는다
-toastEl.addEventListener('pointerdown', (e) => {
-  e.stopPropagation();
-});
+toastEl.addEventListener('pointerdown', (e) => e.stopPropagation());
 toastEl.addEventListener('click', (e) => {
   e.preventDefault();
   e.stopPropagation();
@@ -9171,11 +9140,10 @@ toastEl.addEventListener('click', (e) => {
 
 // 붙잡혀 위험할 때: 발밑 고리 + 화면 가장자리 붉은 기운 + 심장 소리
 const dangerEl = $('danger');
-let heartT = 0,
-  dangerOp = -1;
+let heartT = 0, dangerOp = -1;
 
 function dangerFx(dt) {
-  const k = clamp(G.danger / DANGER_T, 0, 1);
+  const k = THREE.MathUtils.clamp(G.danger / DANGER_T, 0, 1);
   const on = G.state === 'play' && k > 0.003;
   dangerRing.visible = on;
   if (on) {
@@ -9191,7 +9159,7 @@ function dangerFx(dt) {
   if (on && k > 0.02) {
     heartT -= dt;
     if (heartT <= 0) {
-      heartT = lerp(0.8, 0.38, k);
+      heartT = THREE.MathUtils.lerp(0.8, 0.38, k);
       sfxHeart(0.45 + 0.55 * k);
     }
   } else heartT = 0;
@@ -9264,11 +9232,11 @@ const _as = {
   y: 0,
   z: 0
 },
-  _as2 = {
-    x: 0,
-    y: 0,
-    z: 0
-  };
+ _as2 = {
+   x: 0,
+   y: 0,
+   z: 0
+ };
 
 function updateArrow() {
   const pinned = ALLIES.filter((a) => a.rescued && a.pinned && a.clingers.length > 1 && a.pinT > 2.6);
@@ -9326,8 +9294,8 @@ function updateArrow() {
     if (dy > 1e-4) t = Math.min(t, (bottom - oy) / dy);
     else if (dy < -1e-4) t = Math.min(t, (top - oy) / dy);
     t = Math.max(0, t);
-    x = clamp(ox + dx * (t - 6 - bob), m, VW - m);
-    y = clamp(oy + dy * (t - 6 - bob), top, bottom);
+    x = THREE.MathUtils.clamp(ox + dx * (t - 6 - bob), m, VW - m);
+    y = THREE.MathUtils.clamp(oy + dy * (t - 6 - bob), top, bottom);
     ang = Math.atan2(dx, -dy);
   }
   arrowEl.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) rotate(${ang.toFixed(3)}rad)`;
@@ -9380,9 +9348,7 @@ canvas.addEventListener('pointerdown', (e) => {
   sy0 = e.clientY;
   try {
     canvas.setPointerCapture(e.pointerId);
-  } catch (err) {
-
-  }
+  } catch { }
   stickShow(sx0, sy0);
   e.preventDefault();
 });
@@ -9462,6 +9428,7 @@ const modAuto = $('modAuto');
 const silencer = $('silencer');
 const modNoclip = $('modNoclip');
 const modAllPowers = $('modAllPowers');
+const modMenuBtn = $('modmenubtn');
 
 function setModMenu(open) {
   modMenu.hidden = !open;
@@ -9480,19 +9447,19 @@ function syncMainMods() {
     SG.dropT = -1;
     sgBadge(true);
   }
-  if (GAME_MOD.allPowers)
-    for (const def of ITEM_DEFS) POWERS[def.key] = Infinity;
-  else if (wasAllPowers)
-    for (const def of ITEM_DEFS) POWERS[def.key] = ITEM_DURATION;
+  if (GAME_MOD.allPowers) for (const def of ITEM_DEFS) POWERS[def.key] = Infinity;
+  else if (wasAllPowers) for (const def of ITEM_DEFS) POWERS[def.key] = ITEM_DURATION;
   updateItemStatus();
 }
 for (const control of [modInfinite, modRecoil, aimbot, modAuto, modNoclip, modAllPowers, silencer]) control.addEventListener('change', syncMainMods);
 modClose.addEventListener('click', () => setModMenu(false));
-$('modRepel').addEventListener('click', () => { G.modRepelT = 5; });
+$('modRepel').addEventListener('click', () => G.modRepelT = 5);
 $('killAll').addEventListener('click', () => {
-  for (const p of [...live])
-    if (p.state !== 'dying' && p.state !== 'dead') kill(p, 0, 1, 'shot');
+  for (const p of [...live]) kill(p, 0, 1, 'shot');
 });
+modMenuBtn.addEventListener('click', () => setModMenu(modMenu.hidden));
+modMenuBtn.style.display = IS_TOUCH ? 'block' : 'none';
+
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Backquote') {
     e.preventDefault();
@@ -9573,22 +9540,8 @@ const POSTER = {
       hx: -0.08,
       hz: -0.06,
       aim: 0,
-      L: {
-        sx: -0.3,
-        sy: 0,
-        sz: 0.7,
-        ex: -2.5,
-        ez: 1.1,
-        gun: [0.1, 1, 0.05]
-      },
-      R: {
-        sx: -0.3,
-        sy: 0,
-        sz: -0.7,
-        ex: -2.5,
-        ez: -1.1,
-        gun: [-0.6, 1, 0.1]
-      }
+      L: { sx: -0.3, sy: 0, sz: 0.7, ex: -2.5, ez: 1.1, gun: [0.1, 1, 0.05] },
+      R: { sx: -0.3, sy: 0, sz: -0.7, ex: -2.5, ez: -1.1, gun: [-0.6, 1, 0.1] }
     },
     // 친구: 오른손 방망이를 어깨 위로 들고, 왼손 칼은 앞으로
     fr: {
@@ -9600,20 +9553,8 @@ const POSTER = {
       hw: 0.3,
       hx: -0.06,
       hz: 0.05,
-      r: {
-        sx: -0.5,
-        sy: 0,
-        sz: -0.9,
-        ex: -2.2,
-        ez: 0
-      },
-      l: {
-        sx: -0.6,
-        sy: 0,
-        sz: 0.15,
-        ex: -1.3,
-        ez: 0
-      },
+      r: { sx: -0.5, sy: 0, sz: -0.9, ex: -2.2, ez: 0 },
+      l: { sx: -0.6, sy: 0, sz: 0.15, ex: -1.3, ez: 0 },
       bat: [-0.6, 1, -0.2],
       kn: [0.5, -0.2, 0.8],
       knife: true
@@ -9649,12 +9590,8 @@ const POSTER = {
         sy: 0.05,
         hw: -0.08,
         aim: -1,
-        L: {
-          gun: [0.9, 0.6, 0.2]
-        },
-        R: {
-          gun: [-0.9, 0.6, 0.2]
-        }
+        L: { gun: [0.9, 0.6, 0.2] },
+        R: { gun: [-0.9, 0.6, 0.2] }
       },
       fr: {
         x: -0.34,
@@ -9720,16 +9657,6 @@ function resetWrists() {
   }
 }
 
-function seeded(seed) {
-  let s = seed >>> 0;
-  return () => {
-    s = (s + 0x6D2B79F5) >>> 0;
-    let t = s;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 const _pc = new THREE.PerspectiveCamera(32, 1, 0.1, 200);
 const _pv = new THREE.Vector3();
 // 세로로 길거나 정사각형에 가까운 화면은 세로 구도
@@ -9808,12 +9735,8 @@ function posterCamFit() {
 function posterCrowd() {
   POSTER.victim = null;
   const rnd = seeded(POSTER.C.seed);
-  const pickR = (arr) => arr[(rnd() * arr.length) | 0];
-  const me = POSTER.C.me,
-    fr = POSTER.C.fr,
-    V = POSTER.C.victim;
-  const cx = (me.x + fr.x) / 2,
-    cz = (me.z + fr.z) / 2;
+  const me = POSTER.C.me, fr = POSTER.C.fr, V = POSTER.C.victim;
+  const cx = (me.x + fr.x) / 2, cz = (me.z + fr.z) / 2;
   const heroes = [
     [me.x, me.z],
     [fr.x, fr.z]
@@ -9835,8 +9758,7 @@ function posterCrowd() {
     const sp = 0.72 + (cz - z) * 0.06;
     const off = (row % 2) * sp * 0.5;
     for (let x = cx - half + off; x <= cx + half; x += sp) {
-      const px = x + (rnd() - 0.5) * sp * 0.6,
-        pz = z + (rnd() - 0.5) * 0.45;
+      const px = x + (rnd() - 0.5) * sp * 0.6, pz = z + (rnd() - 0.5) * 0.45;
       const r = rnd();
       // 두 사람 바로 뒤 가까운 곳은 비움
       if (pz > POSTER.C.clear.z && Math.abs(px - cx) < POSTER.C.clear.x) continue;
@@ -9863,11 +9785,11 @@ function posterCrowd() {
     p.r2 = rnd() - 0.5;
     p.seed = rnd() * 100;
     setCrowdColors(p.i, {
-      shirt: pickR(CROWD_COLORS.shirt),
-      pants: pickR(CROWD_COLORS.pants),
-      shoe: pickR(CROWD_COLORS.shoe),
-      hair: pickR(CROWD_COLORS.hair),
-      skin: pickR(CROWD_COLORS.skin)
+      shirt: pick(CROWD_COLORS.shirt),
+      pants: pick(CROWD_COLORS.pants),
+      shoe: pick(CROWD_COLORS.shoe),
+      hair: pick(CROWD_COLORS.hair),
+      skin: pick(CROWD_COLORS.skin)
     });
     setFace(p, rnd() < 0.3 ? 1 : 0);
     computePose(p, 0, p.pose);
@@ -9935,8 +9857,8 @@ function posePoster(p, t, o) {
   const dx = (me.x + fr.x) / 2 - p.x,
     dz = (me.z + fr.z) / 2 - p.z,
     dist = Math.hypot(dx, dz) || 0.001;
-  o[P.HW] = clamp(wrapAngle(Math.atan2(dx, dz) - p.yaw), -1.1, 1.1);
-  o[P.HX] = p.pv === 2 ? 0.3 : clamp(-Math.atan2(0.25, dist) - 0.1 - o[P.SX], -0.9, 0.6) + hic * 0.05;
+  o[P.HW] = THREE.MathUtils.clamp(wrapAngle(Math.atan2(dx, dz) - p.yaw), -1.1, 1.1);
+  o[P.HX] = p.pv === 2 ? 0.3 : THREE.MathUtils.clamp(-Math.atan2(0.25, dist) - 0.1 - o[P.SX], -0.9, 0.6) + hic * 0.05;
   o[P.HZ] = p.r1 * 0.45;
 }
 
@@ -9958,8 +9880,7 @@ function mePosterAnimate(dt) {
   o[P.HW] = T.hw;
   o[P.HX] = T.hx + br;
   o[P.HZ] = T.hz;
-  const AL = T.L,
-    AR = T.R;
+  const AL = T.L, AR = T.R;
   o[P.LSX] = AL.sx;
   o[P.LSY] = AL.sy;
   o[P.LSZ] = AL.sz;
@@ -9971,7 +9892,7 @@ function mePosterAnimate(dt) {
   o[P.REX] = AR.ex;
   o[P.REZ] = AR.ez;
   const k = 1 - Math.exp(-14 * dt);
-  for (let i = 0; i < NPOSE; i++) ME.pose[i] = lerp(ME.pose[i], o[i], k);
+  for (let i = 0; i < NPOSE; i++) ME.pose[i] = THREE.MathUtils.lerp(ME.pose[i], o[i], k);
   ME.pose[P.LIFT] = 0;
   ME.x = T.x;
   ME.z = T.z;
@@ -10086,13 +10007,9 @@ window.addEventListener('resize', () => {
 
 // ───────────────────────── 흐름 ─────────────────────────
 let SEQ = [];
-
 function runSeq(items) {
   const base = G.t;
-  for (const [t, fn] of items) SEQ.push({
-    at: base + t,
-    fn
-  });
+  for (const [t, fn] of items) SEQ.push({ at: base + t, fn });
   SEQ.sort((a, b) => a.at - b.at);
 }
 
@@ -10114,10 +10031,7 @@ function prepareTypeLine(el, text) {
     el.append(span);
     return span;
   });
-  typeLayouts.set(el, {
-    text,
-    chars
-  });
+  typeLayouts.set(el, { text, chars });
   return chars;
 }
 
@@ -10265,31 +10179,21 @@ function startIntro() {
   $('certNoA').textContent = certNo();
   const lines = $('intro').querySelectorAll('p');
   // 전체 문장의 줄바꿈과 높이를 먼저 확보하고, 타이핑은 글자의 표시만 바꾼다.
-  const introText = [
-    '인간들의 정신건강이 악화되어',
-    '정신건강한 사람이 희귀해진 근미래',
-    '국가는 이들을 특별관리 보호대상으로 지정하고 등급을 매기기 시작했다.',
-  ];
+
   lines.forEach((l, i) => prepareTypeLine(l, introText[i]));
   placeIdleCrowd();
   setCam('close');
   runSeq([
-    [0.35, () => typeLine(lines[0], '인간들의 정신건강이 악화되어')],
-    [1.9, () => typeLine(lines[1], '정신건강한 사람이 희귀해진 근미래')],
-    [3.5, () => typeLine(lines[2], '국가는 이들을 특별관리 보호대상으로 지정하고 등급을 매기기 시작했다.', 0.048)],
-    [7.0, () => {
-      $('intro').classList.add('out');
-    }],
+    [0.35, () => typeLine(lines[0], introText[0])],
+    [1.9, () => typeLine(lines[1], introText[1])],
+    [3.5, () => typeLine(lines[2], introText[2], 0.048)],
+    [7.0, () => { $('intro').classList.add('out'); }],
     [7.5, () => {
       $('intro').hidden = true;
       showCert('certA');
     }],
-    [8.55, () => {
-      stampIt('stampA', 'certA');
-    }],
-    [10.0, () => {
-      $('certA').querySelector('.cert').classList.add('out');
-    }],
+    [8.55, () => { stampIt('stampA', 'certA'); }],
+    [10.0, () => { $('certA').querySelector('.cert').classList.add('out'); }],
     [10.45, () => {
       $('certA').hidden = true;
       setCam('close');
@@ -10309,13 +10213,7 @@ function startIntro() {
       hideSub();
       setCam('crane', 2.5);
     }],
-    [20, () => {
-      showSub('...씨발.');
-    }],
-    [23.3, () => {
-      hideSub();
-    }],
-    ...noticeSteps(22),
+    ...noticeSteps(15.7),
   ]);
 }
 
@@ -10344,9 +10242,7 @@ function noticeSteps(t0) {
       G.firstNotice = first;
     }],
     [t0 + 1.0, () => {
-      live.filter((p) => p.state === 'idle').forEach((p, k) => {
-        p.lookDelay = k * 0.07;
-      });
+      live.filter((p) => p.state === 'idle').forEach((p, k) => p.lookDelay = k * 0.07 );
       if (G.firstNotice) setFace(G.firstNotice, 0);
     }],
     [t0 + 1.5, () => {
@@ -10519,7 +10415,7 @@ function showResult() {
   RES.tickT = 0;
   RES.done = false;
   RES.btnT = 0;
-  RES.dur = clamp(0.45 + n * 0.004, 0.6, 1.5);
+  RES.dur = THREE.MathUtils.clamp(0.45 + n * 0.004, 0.6, 1.5);
   const b = $('endN');
   b.textContent = '0';
   b.classList.remove('pop');
@@ -10533,7 +10429,7 @@ function updateResult(dt) {
   const n = G.kills,
     b = $('endN');
   if (!RES.done) {
-    const k = clamp((RES.t - 0.35) / RES.dur, 0, 1);
+    const k = THREE.MathUtils.clamp((RES.t - 0.35) / RES.dur, 0, 1);
     const v = Math.round(easeOutCubic(k) * n);
     RES.tickT -= dt;
     if (v !== RES.shown) {
@@ -10579,17 +10475,14 @@ $('mute').addEventListener('click', () => {
   audioInit();
   setMuted(!MUTED);
 });
-$('modmenubtn').addEventListener('click', () => setModMenu(modMenu.hidden));
 setMuted(MUTED);
 if (!IS_TOUCH) document.body.classList.add('desk');
 
 // ───────────────────────── 집 드나들기 ─────────────────────────
 // 둘째 친구와 하이파이브하고 조금 뒤(못 구했어도 80초에는) 앞쪽 안개 속에 집이 선다. 화살표가 말없이 가리키고, 들어갈지는 마음대로.
 // 문 앞에서 문 쪽으로 밀면 화면이 어두워지고 gosiwon.html(1인칭 고시원)로 넘어간다. 나오면 이 페이지로 돌아와 그 자리에서 이어진다.
-const HOUSE_T0 = 48,
-  HOUSE_T1 = 80;
-const linkFadeEl = $('linkFade'),
-  backHintEl = $('backHint');
+const HOUSE_T0 = 48, HOUSE_T1 = 80;
+const linkFadeEl = $('linkFade'), backHintEl = $('backHint');
 
 function linkFade(color, to, dur) {
   const el = linkFadeEl;
@@ -10600,9 +10493,7 @@ function linkFade(color, to, dur) {
   el.style.transition = `opacity ${dur}s ${to > 0 ? 'ease-in' : 'ease-out'}`;
   el.style.opacity = to;
   clearTimeout(el._t);
-  if (to <= 0) el._t = setTimeout(() => {
-    el.style.visibility = 'hidden';
-  }, dur * 1000 + 60);
+  if (to <= 0) el._t = setTimeout(() => el.style.visibility = 'hidden', dur * 1000 + 60);
 }
 
 function houseWanted() {
@@ -10612,10 +10503,7 @@ function houseWanted() {
 }
 // 집(지붕 포함)이 지금 화면에 걸리는지
 function houseSeen(x, z) {
-  let x0 = 1e9,
-    x1 = -1e9,
-    y0 = 1e9,
-    y1 = -1e9;
+  let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
   for (const sx of [-1, 1])
     for (const sz of [-1, 1])
       for (const y of [0, HH + ROOF_UP + 0.25]) {
@@ -10642,9 +10530,7 @@ function houseAppear() {
     l.rel = 'prefetch';
     l.href = './gosiwon.html' + location.search;
     document.head.appendChild(l);
-  } catch (e) {
-
-  }
+  } catch { }
 }
 
 function houseUpdate(dt) {
@@ -10726,13 +10612,10 @@ function startEnterHouse() {
 
 function enterTick(dt) {
   // 문 앞으로 다가서서 문을 마주 보면 화면이 어두워진다
-  const H = HOUSE,
-    E = H.enter,
-    front = H.z + HD / 2;
+  const H = HOUSE, E = H.enter, front = H.z + HD / 2;
   E.t += dt;
   const k = easeInOutSine(E.t / 0.55);
-  const x = lerp(E.x0, H.dx, k),
-    z = lerp(E.z0, front + 0.32, k);
+  const x = THREE.MathUtils.lerp(E.x0, H.dx, k), z = THREE.MathUtils.lerp(E.z0, front + 0.32, k);
   ME.vx = (x - ME.x) / Math.max(dt, 1e-3);
   ME.vz = (z - ME.z) / Math.max(dt, 1e-3);
   ME.x = x;
@@ -10782,16 +10665,11 @@ function goInside() {
 function placeWaitingCrowd(n) {
   const pts = [];
   for (let tries = 0; pts.length < n && tries < 4000; tries++) {
-    const th = rand(-1.85, 1.85),
-      r = rand(4.2, 9.0);
-    const x = ME.x + Math.sin(th) * r * 1.12,
-      z = ME.z + Math.cos(th) * r;
+    const th = rand(-1.85, 1.85), r = rand(4.2, 9.0);
+    const x = ME.x + Math.sin(th) * r * 1.12, z = ME.z + Math.cos(th) * r;
     if (houseNear(x, z, 0.85)) continue;
     if (pts.some((q) => (q.x - x) ** 2 + (q.z - z) ** 2 < 0.95 * 0.95)) continue;
-    pts.push({
-      x,
-      z
-    });
+    pts.push({ x, z });
   }
   pts.sort((a, b) => Math.hypot(a.x - ME.x, a.z - ME.z) - Math.hypot(b.x - ME.x, b.z - ME.z));
   for (const q of pts) {
@@ -10817,9 +10695,9 @@ function setupReturn(L) {
   G.ctrl = false;
   G.freeze = true;
   G.playT = Math.max(0, +m.playT || 0);
-  G.ringNext = clamp(m.ringNext | 0, 0, RINGS.length);
+  G.ringNext = THREE.MathUtils.clamp(m.ringNext | 0, 0, RINGS.length);
   G.ringT = Number.isFinite(+m.ringT) ? +m.ringT : 134;
-  G.allyNext = clamp(m.allyNext | 0, 0, ALLIES.length);
+  G.allyNext = THREE.MathUtils.clamp(m.allyNext | 0, 0, ALLIES.length);
   G.allyT = Math.max(+m.allyT || 0, G.playT + 12);
   G.allyKills = m.allyKills | 0;
   G.helped = m.helped | 0;
@@ -10863,9 +10741,9 @@ function setupReturn(L) {
   GUARD.bear = Math.PI;
   placeWaitingCrowd(18 + 4 * saved.length);
   // 집 안에서 들고 나온 산탄총
-  sgEquip(clamp(L.shells | 0, 6, 30));
-  if (m.face) addMeFaceBlood(clamp(m.face | 0, 0, 34));
-  if (m.shirt) addShirtBlood(clamp(m.shirt | 0, 0, 60));
+  sgEquip(THREE.MathUtils.clamp(L.shells | 0, 6, 30));
+  if (m.face) addMeFaceBlood(THREE.MathUtils.clamp(m.face | 0, 0, 34));
+  if (m.shirt) addShirtBlood(THREE.MathUtils.clamp(m.shirt | 0, 0, 60));
   $('hud').hidden = false;
   weaponEl.hidden = false;
   CAM.zoom = CAM.zoomTo = 1.12;
@@ -11023,7 +10901,7 @@ function frame(now) {
   renderer.render(scene, camera);
   audioWatch(dt);
   // 느린 기기는 단계적으로 가볍게: 해상도 → 군중 그림자 → 해상도 → 시체 윤곽선
-  frameAvg = lerp(frameAvg, dt * 1000, 0.05);
+  frameAvg = THREE.MathUtils.lerp(frameAvg, dt * 1000, 0.05);
   perfT += dt;
   if (perfT > 2.5 && frameAvg > 24) {
     perfT = 0;
