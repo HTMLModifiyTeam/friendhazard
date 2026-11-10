@@ -2871,10 +2871,7 @@ function makeOutShotgun() {
   holder.position.set(0, -0.04, 0.0);
   holder.rotation.x = Math.PI / 2;
   MR.wrR.add(holder);
-  const {
-    g,
-    pump
-  } = makeOutShotgun();
+  const { g, pump } = makeOutShotgun();
   holder.add(g);
   g.visible = false;
   SG.model = g;
@@ -2884,9 +2881,7 @@ function makeOutShotgun() {
 
 function sgDropAt(x, z, y0) {
   // 다 쓴 총은 손에서 떨어져 바닥에 그대로 남는다
-  const {
-    g
-  } = makeOutShotgun();
+  const { g } = makeOutShotgun();
   g.position.set(x, y0, z);
   g.rotation.set(0, rand(0, TAU), 0.25, 'YXZ');
   g.userData.fall = {

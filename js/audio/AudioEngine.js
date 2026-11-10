@@ -1,17 +1,4 @@
-/**
- * AudioEngine
- * 마스터 버스 / 컴프레서 / 리버브 / SFX·VOICE·MUSIC 버스, 노드 헬퍼, 보이스 로딩,
- * 그리고 컨텍스트 정지·NaN 오염 감시/복구를 한 클래스에 묶었다.
- *
- * 그래프:
- *   sfx ─┐
- *   voice ─┼─► comp ─► master ─► destination
- *   music ─┤                 └─► tap(analyser, 감시용)
- *   verbIn ─► verb(convolver) ─► verbOut ─┘
- *
- * verbIn 은 재구성(rebuild) 후에도 유지되므로, 리버브 센드를 이미 연결한
- * 소스들이 rebuild 이후에도 계속 리버브로 들어간다.
- */
+import { MathUtils } from "three";
 
 const DEFAULTS = {
   latencyHint: 'interactive',
@@ -30,8 +17,6 @@ const DEFAULTS = {
   panThreshold: 0.06,    // 이보다 작은 pan 은 패너 생략
   verbSendMin: 0.2,      // 이보다 작은 리버브 센드는 생략
 };
-
-const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 export default class AudioEngine {
   /**
@@ -254,7 +239,7 @@ export default class AudioEngine {
     let tail = g;
     if (ctx.createStereoPanner) {
       const p = track(ctx.createStereoPanner());
-      p.pan.value = clamp(o.pan || 0, -1, 1);
+      p.pan.value = MathUtils.clamp(o.pan || 0, -1, 1);
       g.connect(p);
       tail = p;
     }
@@ -278,7 +263,7 @@ export default class AudioEngine {
 
       /** 0 ~ 1 재생 진행도 */
       progress() {
-        return clamp((engine.ctx.currentTime - h.t0) / h.dur, 0, 1);
+        return MathUtils.clamp((engine.ctx.currentTime - h.t0) / h.dur, 0, 1);
       },
 
       /** fast 초 동안 페이드아웃 후 정지 (클릭 방지) */
@@ -409,7 +394,7 @@ export default class AudioEngine {
     let tail = g;
     if (pan && Math.abs(pan) > this.cfg.panThreshold && this.ctx.createStereoPanner) {
       const p = this.ctx.createStereoPanner();
-      p.pan.value = clamp(pan, -1, 1);
+      p.pan.value = MathUtils.clamp(pan, -1, 1);
       g.connect(p);
       tail = p;
     }
