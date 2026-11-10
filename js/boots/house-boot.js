@@ -1,7 +1,7 @@
 // Lightweight page bootstrap and load-failure notice.
 // 밖(원래 게임)에서 들어왔으면 시작 화면 대신 어두운 현관 앞에서 시작
-import { $ } from './utils.js';
-import Linker from './utils/Linker.js';
+import { $ } from '../utils.js';
+import Linker from '../utils/Linker.js';
 
 (function () {
   'use strict';

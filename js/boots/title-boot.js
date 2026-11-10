@@ -1,6 +1,6 @@
 // Lightweight page bootstrap, offline check and load-failure notice.
 // 집(gosiwon.html)에서 막 나왔으면 시작 화면을 건너뛰고 하얀 화면에서 이어 간다
-import Linker from './utils/Linker.js';
+import Linker from '../utils/Linker.js';
 
 (function () {
   'use strict';
