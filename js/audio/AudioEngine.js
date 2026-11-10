@@ -1,7 +1,7 @@
 import { MathUtils } from "three";
+import { rand } from "../utils.js";
 
 const DEFAULTS = {
-  latencyHint: 'interactive',
   masterGain: 0.92,
   sfxGain: 0.95,
   voiceGain: 1.05,
@@ -74,16 +74,22 @@ export default class AudioEngine {
   get noise() { return this.nodes.noise; }
   get shaper() { return this.nodes.shaper; }
 
-  /* ───────────── 라이프사이클 ───────────── */
+  get canPlay() {
+    const ctx = this.audio.ctx;
+    return !!ctx && ctx.state === 'running' && !this.muted;
+  }
 
   /** 사용자 제스처 안에서 호출. 여러 번 호출해도 안전. */
   init() {
-    if (this.ctx) { this.resume(); return true; }
+    if (this.ctx) {
+      this.resume();
+      return true;
+    }
 
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return false;
 
-    this.ctx = new AC({ latencyHint: this.cfg.latencyHint });
+    this.ctx = new AC({ latencyHint: 'interactive' });
     const n = this.nodes;
     const { reverb, noiseSeconds, shaperAmount } = this.cfg;
 
@@ -111,16 +117,12 @@ export default class AudioEngine {
   /** 정지된 컨텍스트 재개. 실패해도 예외를 던지지 않는다. */
   resume() {
     const ctx = this.ctx;
-    if (!ctx || ctx.state === 'running' || ctx.state === 'closed') return Promise.resolve();
+    if (!ctx || ctx.state === 'running' || ctx.state === 'closed') return;
     try {
-      return Promise.resolve(ctx.resume()).catch(() => { });
-    } catch {
-      return Promise.resolve();
-    }
+      const p = ac.resume();
+      if (p && p.catch) p.catch(() => {});
+    } catch { }
   }
-
-  /** 기존 audioPoke: 제스처 이벤트마다 가볍게 호출 */
-  poke() { this.resume(); }
 
   /** 첫 사용자 입력에서 init/resume. 해제 함수를 반환한다. */
   autoUnlock(target = window, events = ['pointerdown', 'keydown', 'touchend']) {
@@ -148,11 +150,6 @@ export default class AudioEngine {
     if (g) g.setTargetAtTime(this._masterTarget(), this.ctx.currentTime, this.cfg.muteRamp);
   }
 
-  toggleMute() {
-    this.setMuted(!this.muted);
-    return this.muted;
-  }
-
   /* ───────────── 보이스 ───────────── */
 
   /**
@@ -174,9 +171,7 @@ export default class AudioEngine {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const buf = await ctx.decodeAudioData(await res.arrayBuffer());
         this.voices.set(key, buf);
-      } catch (e) {
-        console.warn('Failed to load voice:', key, file, e);
-      }
+      } catch (e) { console.warn('Failed to load voice:', key, file, e); }
     }));
   }
 
@@ -201,7 +196,10 @@ export default class AudioEngine {
     const rate = o.rate || 1;
     const nodes = [];                 // 종료 시 한꺼번에 disconnect
     const lfos = [];                  // 종료 시 한꺼번에 stop
-    const track = (n) => { nodes.push(n); return n; };
+    const track = (n) => {
+      nodes.push(n);
+      return n;
+    };
 
     const src = track(ctx.createBufferSource());
     src.buffer = buf;
@@ -212,14 +210,14 @@ export default class AudioEngine {
 
     if (o.sob) {
       // 음높이 떨림: LFO → playbackRate
-      const pitchLfo = track(this.osc('sine', AudioEngine.rand(5.6, 7.4)));
+      const pitchLfo = track(this.osc('sine', rand(5.6, 7.4)));
       const pitchDepth = track(this.gain(o.sob * rate));
       pitchLfo.connect(pitchDepth);
       pitchDepth.connect(src.playbackRate);
 
       // 숨 떨림: 0.78 ± 0.22 트레몰로
       const trem = track(this.gain(0.78));
-      const tremLfo = track(this.osc('sine', AudioEngine.rand(4.5, 6)));
+      const tremLfo = track(this.osc('sine', rand(4.5, 6)));
       const tremDepth = track(this.gain(0.22));
       tremLfo.connect(tremDepth);
       tremDepth.connect(trem.gain);
@@ -254,7 +252,6 @@ export default class AudioEngine {
 
     const t0 = ctx.currentTime + (o.delay || 0);
     const dur = buf.duration / rate;
-    const engine = this;
 
     /** @typedef {{key:string, src:AudioBufferSourceNode, g:GainNode, t0:number, rate:number, dur:number, stopped:boolean, progress():number, stop(fast?:number):void}} VoiceHandle */
     const h = {
@@ -263,14 +260,14 @@ export default class AudioEngine {
 
       /** 0 ~ 1 재생 진행도 */
       progress() {
-        return MathUtils.clamp((engine.ctx.currentTime - h.t0) / h.dur, 0, 1);
+        return MathUtils.clamp((ctx.currentTime - h.t0) / h.dur, 0, 1);
       },
 
       /** fast 초 동안 페이드아웃 후 정지 (클릭 방지) */
       stop(fast = 0.012) {
         if (h.stopped) return;
         h.stopped = true;
-        const t = engine.ctx.currentTime;
+        const t = ctx.currentTime;
         try {
           g.gain.cancelScheduledValues(t);
           g.gain.setValueAtTime(g.gain.value, t);
@@ -298,24 +295,15 @@ export default class AudioEngine {
     return h;
   }
 
-  /** 특정 키의 재생 중인 보이스를 모두 정지 */
-  stopVoice(key, fast) {
-    for (const h of [...this.activeVoices]) {
-      if (h.key === key) h.stop(fast);
-    }
-  }
-
   /** 모든 보이스 정지 */
   stopAllVoices(fast) {
     for (const h of [...this.activeVoices]) h.stop(fast);
   }
 
-  /** key 가 재생 중인지 */
-  isVoicePlaying(key) {
-    for (const h of this.activeVoices) {
-      if (h.key === key && !h.stopped) return true;
-    }
-    return false;
+  isVoicePlaying() {
+    let n = 0;
+    for (const h of this.activeVoices) if (!h.stopped) n++;
+    return n;
   }
 
   /* ───────────── 감시 / 복구 ───────────── */
@@ -406,9 +394,6 @@ export default class AudioEngine {
     }
     return g;
   }
-
-  /** [a, b) 범위 난수 */
-  static rand(a, b) { return a + Math.random() * (b - a); }
 
   /** 0.0001 → peak → 0.0001 지수 어택/디케이 엔벨로프 */
   static envAD(param, t, attack, peak, decay) {

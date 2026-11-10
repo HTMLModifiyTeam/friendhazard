@@ -1,12 +1,8 @@
 export const $ = (id) => document.getElementById(id);
 
-// MATH
+// RANDOM
 export const rand = (a, b) => a + Math.random() * (b - a);
 export const pick = (arr) => arr[(Math.random() * arr.length) | 0];
-export const TAU = Math.PI * 2;
-export const approach = (cur, target, k, dt) => cur + (target - cur) * (1 - Math.exp(-k * dt));
-export const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-export const angleApproach = (cur, target, k, dt) => cur + wrapAngle(target - cur) * (1 - Math.exp(-k * dt));
 export function seeded(seed) {
   let s = seed >>> 0;
   return () => {
@@ -17,3 +13,11 @@ export function seeded(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+// MATH
+export const TAU = Math.PI * 2;
+export const approach = (cur, target, k, dt) => cur + (target - cur) * (1 - Math.exp(-k * dt));
+export const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+export const angleTo = (cur, target, k, dt) => cur + wrapAngle(target - cur) * (1 - Math.exp(-k * dt));
+export const angleApproach = (cur, target, k, dt) => cur + wrapAngle(target - cur) * (1 - Math.exp(-k * dt));
+export const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);

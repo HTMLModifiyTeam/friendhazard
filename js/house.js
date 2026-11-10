@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import VOICE_DATA from './data/voices.js';
-import { CROWD_COLORS } from './data/data.js';
-import { GOSI, BOOKS, CLOTH, BLANKET } from './data/house/data.js';
-import { $, rand, pick, TAU, approach, wrapAngle } from './utils.js';
+import { CROWD_COLORS, OUTLINE } from './data/data.js';
+import { GOSI, BOOKS, CLOTH, BLANKET, LIE_SHIRT, LIE_PANTS } from './data/house/data.js';
+import { $, rand, pick, TAU, approach, wrapAngle, angleTo, seeded } from './utils.js';
 import { easeOutCubic, easeInQuad, easeInOutSine } from './eases.js'
 import Linker from './utils/Linker.js';
 import Store from './utils/Store.js';
@@ -47,12 +47,6 @@ const vmCamera = new THREE.PerspectiveCamera(56, 1, 0.01, 10);
 const doorScene = new THREE.Scene();
 const doorCamera = new THREE.PerspectiveCamera(42, 1, 0.05, 30);
 
-// 윤곽선: 화면 픽셀 단위로 일정한 두께
-const OUTLINE = {
-  px: { value: 2.6 },
-  res: { value: new THREE.Vector2(1, 1) }
-};
-
 let VW = 1, VH = 1;
 const _bufSize = new THREE.Vector2();
 
@@ -85,11 +79,7 @@ function onResize() {
 window.addEventListener('resize', onResize);
 
 // 느린 휴대폰: 해상도를 조금씩 낮춘다
-const PERF = {
-  ema: 16,
-  slowT: 0,
-  fastT: 0
-};
+const PERF = { ema: 16, slowT: 0, fastT: 0 };
 
 function perfTick(rawDt) {
   PERF.ema = THREE.MathUtils.lerp(PERF.ema, rawDt * 1000, 0.05);
@@ -115,1260 +105,24 @@ function perfTick(rawDt) {
   }
 }
 
-const _v = new THREE.Vector3(),
-  _v2 = new THREE.Vector3(),
-  _v3 = new THREE.Vector3();
-const _m4 = new THREE.Matrix4(),
-  _q = new THREE.Quaternion(),
-  _s = new THREE.Vector3(),
-  _e = new THREE.Euler();
+const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
+const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _e = new THREE.Euler();
 const _zeroM = new THREE.Matrix4().makeScale(0, 0, 0);
 const _col = new THREE.Color();
 
 // ───────────────────────── 소리 ─────────────────────────
-let ac = null;
-const A = {};
 let MUTED = !!store.get('muted', false);
 const audio = new AudioEngine({ muted: MUTED, voiceData: () => VOICE_DATA });
 audio.autoUnlock();
 const sfx = new Sfx({ audio, engine: AudioEngine, rand, isMuted: () => MUTED });
-const VO = {};
-const activeVoices = new Set();
 
 function setMuted(m) {
   MUTED = m;
   store.set('muted', m);
   $('mute').classList.toggle('muted', m);
   $('mute').setAttribute('aria-label', m ? '소리 켜기' : '소리 끄기');
-  if (ac) {
-    const t = ac.currentTime;
-    A.master.gain.cancelScheduledValues(t);
-    A.master.gain.setTargetAtTime(m ? 0 : 0.95, t, 0.03);
-  }
+  audio.setMuted(m);
 }
-
-function makeNoise(sec) {
-  const n = Math.floor(ac.sampleRate * sec),
-    b = ac.createBuffer(1, n, ac.sampleRate),
-    d = b.getChannelData(0);
-  for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
-  return b;
-}
-
-function makeIR(sec, decay) {
-  const n = Math.floor(ac.sampleRate * sec),
-    b = ac.createBuffer(2, n, ac.sampleRate);
-  for (let c = 0; c < 2; c++) {
-    const d = b.getChannelData(c);
-    for (let i = 0; i < n; i++) {
-      const t = i / n;
-      // 앞부분은 벽에 부딪힌 짧은 반사들
-      const er = i < ac.sampleRate * 0.06 && Math.random() < 0.004 ? (Math.random() * 2 - 1) * 1.6 : 0;
-      d[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, decay) * (i < 120 ? i / 120 : 1) + er;
-    }
-  }
-  return b;
-}
-
-function makeCurve(k) {
-  const n = 1024,
-    c = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    const x = i / (n - 1) * 2 - 1;
-    c[i] = Math.tanh(x * k) / Math.tanh(k);
-  }
-  return c;
-}
-
-async function decodeVoices() {
-  let data = VOICE_DATA || {};
-  await Promise.all(Object.keys(data).map(async (k) => {
-    try {
-      const res = await fetch("voices/" + data[k].b);
-      if (!res.ok) throw new Error(res.status);
-      const ab = await res.arrayBuffer();
-      VO[k] = await ac.decodeAudioData(ab);
-    } catch (e) {
-      console.warn('Failed to load voice:', k, data[k].b, e);
-    }
-  }));
-}
-
-function gainN(v) {
-  const g = ac.createGain();
-  g.gain.value = v;
-  return g;
-}
-
-function filt(type, f, q) {
-  const b = ac.createBiquadFilter();
-  b.type = type;
-  b.frequency.value = f;
-  if (q !== undefined) b.Q.value = q;
-  return b;
-}
-
-function oscN(type, f) {
-  const o = ac.createOscillator();
-  o.type = type;
-  o.frequency.value = f;
-  return o;
-}
-
-function noiseN(rate) {
-  const s = ac.createBufferSource();
-  s.buffer = A.noise;
-  s.loop = true;
-  if (rate) s.playbackRate.value = rate;
-  return s;
-}
-
-function envAD(param, t, a, peak, d) {
-  param.cancelScheduledValues(t);
-  param.setValueAtTime(0.0001, t);
-  param.exponentialRampToValueAtTime(Math.max(0.0002, peak), t + a);
-  param.exponentialRampToValueAtTime(0.0001, t + a + d);
-}
-
-function outChain(vol, pan, verb, lp) {
-  const g = gainN(vol);
-  let head = g,
-    tail = g;
-  if (lp) {
-    const f = filt('lowpass', lp, 0.7);
-    f.connect(g);
-    head = f;
-  }
-  if (pan && Math.abs(pan) > 0.04 && ac.createStereoPanner) {
-    const p = ac.createStereoPanner();
-    p.pan.value = THREE.MathUtils.clamp(pan, -1, 1);
-    g.connect(p);
-    tail = p;
-  }
-  tail.connect(A.sfx);
-  if (verb && verb > 0.05) {
-    const s = gainN(verb);
-    g.connect(s);
-    s.connect(A.verb);
-  }
-  return head;
-}
-const ok = () => ac && ac.state === 'running';
-// 동시에 너무 많이 울리면 휴대폰 소리 엔진이 버티지 못한다.
-const SFX_MAX = 22;
-const sfxEnds = [];
-let sfxWinT = -1,
-  sfxWinN = 0;
-
-function sfxGate(prio, dur) {
-  if (!ok()) return false;
-  const now = ac.currentTime;
-  for (let i = sfxEnds.length - 1; i >= 0; i--)
-    if (sfxEnds[i] <= now) sfxEnds.splice(i, 1);
-  if (now - sfxWinT > 0.05) {
-    sfxWinT = now;
-    sfxWinN = 0;
-  }
-  if (prio < 3) {
-    const cap = prio === 2 ? SFX_MAX + 4 : prio === 1 ? SFX_MAX : SFX_MAX - 8;
-    const win = prio === 2 ? 7 : prio === 1 ? 4 : 2;
-    if (sfxEnds.length >= cap || sfxWinN >= win) return false;
-  }
-  sfxEnds.push(now + dur);
-  sfxWinN++;
-  return true;
-}
-
-// ── 총 ──
-function sfxPistol(pan = 0) {
-  if (!sfxGate(2, 0.6)) return;
-  const t = ac.currentTime + 0.002,
-    r = rand(0.93, 1.07);
-  const out = outChain(0.95, pan * 0.5, 0.85);
-  const sh = ac.createWaveShaper();
-  sh.curve = A.shaper;
-  sh.connect(out);
-  const n1 = noiseN(rand(0.9, 1.15));
-  const hp = filt('highpass', 2300, 0.7);
-  const g1 = gainN(0);
-  envAD(g1.gain, t, 0.0007, 1.0, 0.05);
-  n1.connect(hp).connect(g1).connect(sh);
-  n1.start(t, rand(0, 2));
-  n1.stop(t + 0.08);
-  const n2 = noiseN();
-  const lp = filt('lowpass', 6500, 0.8);
-  lp.frequency.setValueAtTime(7200 * r, t);
-  lp.frequency.exponentialRampToValueAtTime(240, t + 0.24);
-  const g2 = gainN(0);
-  envAD(g2.gain, t, 0.0015, 1.0, 0.26);
-  n2.connect(lp).connect(g2).connect(sh);
-  n2.start(t, rand(0, 2));
-  n2.stop(t + 0.32);
-  const o = oscN('sine', 160 * r);
-  o.frequency.setValueAtTime(170 * r, t);
-  o.frequency.exponentialRampToValueAtTime(42, t + 0.11);
-  const g3 = gainN(0);
-  envAD(g3.gain, t, 0.002, 1.2, 0.18);
-  o.connect(g3).connect(sh);
-  o.start(t);
-  o.stop(t + 0.24);
-  // 기계음 (슬라이드가 튕기는 짧은 쇳소리)
-  const o2 = oscN('square', 2900 * r);
-  const b2 = filt('bandpass', 3100, 6);
-  const g4 = gainN(0);
-  envAD(g4.gain, t + 0.012, 0.001, 0.08, 0.03);
-  o2.connect(b2).connect(g4).connect(out);
-  o2.start(t + 0.01);
-  o2.stop(t + 0.06);
-}
-
-function sfxShotgun() {
-  if (!sfxGate(3, 0.9)) return;
-  const t = ac.currentTime + 0.002;
-  const out = outChain(1.15, 0, 1.0);
-  const sh = ac.createWaveShaper();
-  sh.curve = A.shaperHard;
-  sh.connect(out);
-  const n1 = noiseN(rand(0.85, 1.0));
-  const hp = filt('highpass', 1600, 0.6);
-  const g1 = gainN(0);
-  envAD(g1.gain, t, 0.0008, 1.0, 0.08);
-  n1.connect(hp).connect(g1).connect(sh);
-  n1.start(t, rand(0, 2));
-  n1.stop(t + 0.12);
-  const n2 = noiseN(0.8);
-  const lp = filt('lowpass', 5000, 0.7);
-  lp.frequency.setValueAtTime(5200, t);
-  lp.frequency.exponentialRampToValueAtTime(160, t + 0.45);
-  const g2 = gainN(0);
-  envAD(g2.gain, t, 0.002, 1.2, 0.48);
-  n2.connect(lp).connect(g2).connect(sh);
-  n2.start(t, rand(0, 2));
-  n2.stop(t + 0.55);
-  const o = oscN('sine', 90);
-  o.frequency.setValueAtTime(110, t);
-  o.frequency.exponentialRampToValueAtTime(30, t + 0.3);
-  const g3 = gainN(0);
-  envAD(g3.gain, t, 0.003, 1.5, 0.34);
-  o.connect(g3).connect(sh);
-  o.start(t);
-  o.stop(t + 0.4);
-  const o2 = oscN('triangle', 55);
-  const g5 = gainN(0);
-  envAD(g5.gain, t + 0.01, 0.01, 0.7, 0.5);
-  o2.connect(g5).connect(out);
-  o2.start(t);
-  o2.stop(t + 0.6);
-}
-
-function sfxClick(t, f, v, dur = 0.02, q = 5) {
-  const out = outChain(v, 0, 0.12);
-  const n = noiseN(rand(0.9, 1.2));
-  const bp = filt('bandpass', f, q);
-  const g = gainN(0);
-  envAD(g.gain, t, 0.0008, 1, dur);
-  n.connect(bp).connect(g).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + dur + 0.03);
-  const o = oscN('square', f * 0.5);
-  const g2 = gainN(0);
-  envAD(g2.gain, t, 0.0005, 0.12, dur * 0.6);
-  o.connect(g2).connect(out);
-  o.start(t);
-  o.stop(t + dur + 0.02);
-}
-
-function sfxMagOut(d = 0) {
-  if (!sfxGate(2, 0.2)) return;
-  const t = ac.currentTime + d;
-  sfxClick(t, 2200, 0.45, 0.025);
-  sfxClick(t + 0.05, 1300, 0.3, 0.04, 3);
-}
-
-function sfxMagIn(d = 0) {
-  if (!sfxGate(2, 0.2)) return;
-  const t = ac.currentTime + d;
-  sfxClick(t, 1500, 0.55, 0.03, 3);
-  sfxClick(t + 0.045, 3200, 0.5, 0.02, 7);
-}
-
-function sfxSlide(d = 0) {
-  if (!sfxGate(2, 0.25)) return;
-  const t = ac.currentTime + d;
-  sfxClick(t, 2600, 0.5, 0.03, 4);
-  sfxClick(t + 0.09, 3800, 0.65, 0.025, 8);
-}
-
-function sfxPump(d = 0) {
-  if (!sfxGate(2, 0.4)) return;
-  const t = ac.currentTime + d;
-  sfxClick(t, 1100, 0.75, 0.05, 2.5);
-  sfxClick(t + 0.02, 2600, 0.4, 0.03, 6);
-  sfxClick(t + 0.2, 1400, 0.85, 0.05, 2.5);
-  sfxClick(t + 0.215, 3400, 0.55, 0.03, 8);
-}
-
-function sfxShellIn(d = 0) {
-  if (!sfxGate(2, 0.15)) return;
-  const t = ac.currentTime + d;
-  sfxClick(t, 1800, 0.5, 0.03, 3);
-  sfxClick(t + 0.035, 900, 0.35, 0.04, 2);
-}
-
-function sfxSwitch() {
-  if (!sfxGate(2, 0.3)) return;
-  const t = ac.currentTime;
-  sfxClick(t, 1700, 0.3, 0.04, 2);
-  sfxClick(t + 0.16, 2600, 0.35, 0.03, 5);
-}
-let tinkBudget = 0;
-
-function sfxTink(v = 1, pan = 0) {
-  if (tinkBudget > 3 || !sfxGate(0, 0.17)) return;
-  tinkBudget++;
-  const t = ac.currentTime,
-    r = rand(0.88, 1.12);
-  const out = outChain(0.14 * v, pan * 0.5, 0.1);
-  for (const [f, d, a] of [
-    [3150, 0.16, 1],
-    [6820, 0.07, 0.5]
-  ]) {
-    const o = oscN('sine', f * r);
-    const g = gainN(0);
-    envAD(g.gain, t, 0.0008, a, d * rand(0.8, 1.2));
-    o.connect(g).connect(out);
-    o.start(t);
-    o.stop(t + d + 0.05);
-  }
-}
-// 벽에 박히는 소리: 석고보드 '퍽' + 부스러기
-function sfxWallHit(v = 1, pan = 0) {
-  if (!sfxGate(0, 0.12)) return;
-  const t = ac.currentTime + 0.01;
-  const out = outChain(0.4 * v, pan * 0.5, 0.25);
-  const n = noiseN(rand(0.8, 1.1));
-  const bp = filt('bandpass', rand(900, 1400), 1.2);
-  const g = gainN(0);
-  envAD(g.gain, t, 0.001, 0.9, 0.05);
-  n.connect(bp).connect(g).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.08);
-  const n2 = noiseN(1.4);
-  const hp = filt('highpass', 3500, 0.7);
-  const g2 = gainN(0);
-  envAD(g2.gain, t + 0.02, 0.004, 0.25, 0.09);
-  n2.connect(hp).connect(g2).connect(out);
-  n2.start(t, rand(0, 2));
-  n2.stop(t + 0.14);
-}
-
-function sfxAmmo() {
-  if (!ok()) return;
-  const t = ac.currentTime + 0.002,
-    out = outChain(0.42, 0, 0.1);
-  [
-    [1318.51, 0, 0.07],
-    [1760, 0.075, 0.07],
-    [2637.02, 0.15, 0.16]
-  ].forEach(([f, d, decay]) => {
-    const tt = t + d;
-    const o = oscN('triangle', f),
-      g = gainN(0);
-    const ov = oscN('sine', f * 2),
-      og = gainN(0);
-    envAD(g.gain, tt, 0.002, 0.68, decay);
-    envAD(og.gain, tt, 0.001, 0.14, decay * 0.65);
-    o.connect(g).connect(out);
-    ov.connect(og).connect(out);
-    o.start(tt);
-    ov.start(tt);
-    o.stop(tt + decay + 0.03);
-    ov.stop(tt + decay + 0.03);
-  });
-  sfxClick(t, 1400, 0.3, 0.04, 2);
-}
-
-// ── 몸 ──
-function sfxFlesh(v = 1, pan = 0, lp = 0) {
-  if (!sfxGate(1, 0.14)) return;
-  const t = ac.currentTime + 0.004;
-  const out = outChain(0.85 * v, pan * 0.5, 0.2, lp);
-  const n = noiseN(rand(0.7, 0.9));
-  const l = filt('lowpass', 1100, 1.4);
-  const g = gainN(0);
-  envAD(g.gain, t, 0.002, 0.9, 0.07);
-  n.connect(l).connect(g).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.12);
-  const o = oscN('sine', 95);
-  o.frequency.exponentialRampToValueAtTime(52, t + 0.09);
-  const g2 = gainN(0);
-  envAD(g2.gain, t, 0.002, 0.9, 0.1);
-  o.connect(g2).connect(out);
-  o.start(t);
-  o.stop(t + 0.14);
-  const n2 = noiseN(rand(1, 1.3));
-  const bp = filt('bandpass', 1500, 1.6);
-  const g3 = gainN(0);
-  envAD(g3.gain, t + 0.012, 0.002, 0.55, 0.06);
-  n2.connect(bp).connect(g3).connect(out);
-  n2.start(t + 0.01, rand(0, 2));
-  n2.stop(t + 0.1);
-}
-
-function sfxHead(pan = 0) {
-  if (!sfxGate(2, 0.2)) return;
-  const t = ac.currentTime + 0.006;
-  const out = outChain(0.9, pan * 0.5, 0.3);
-  // 껍질이 깨지는 '빡' + 젖은 터짐
-  const n = noiseN(rand(1.1, 1.3));
-  const bp = filt('bandpass', 2400, 2);
-  const g = gainN(0);
-  envAD(g.gain, t, 0.0006, 1.0, 0.03);
-  n.connect(bp).connect(g).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.05);
-  const n2 = noiseN(0.7);
-  const lp = filt('lowpass', 1800, 4);
-  lp.frequency.setValueAtTime(2400, t);
-  lp.frequency.exponentialRampToValueAtTime(300, t + 0.14);
-  const g2 = gainN(0);
-  envAD(g2.gain, t + 0.008, 0.002, 1.0, 0.13);
-  n2.connect(lp).connect(g2).connect(out);
-  n2.start(t, rand(0, 2));
-  n2.stop(t + 0.2);
-  const o = oscN('sine', 140);
-  o.frequency.setValueAtTime(150, t);
-  o.frequency.exponentialRampToValueAtTime(48, t + 0.12);
-  const g3 = gainN(0);
-  envAD(g3.gain, t, 0.002, 1.0, 0.13);
-  o.connect(g3).connect(out);
-  o.start(t);
-  o.stop(t + 0.18);
-}
-
-function sfxHitTick(kill) {
-  if (!ok()) return;
-  const t = ac.currentTime + 0.01;
-  const out = outChain(kill ? 0.3 : 0.2, 0, 0);
-  const o = oscN('triangle', kill ? 1650 : 2300);
-  const g = gainN(0);
-  envAD(g.gain, t, 0.0008, 1, kill ? 0.07 : 0.035);
-  o.connect(g).connect(out);
-  o.start(t);
-  o.stop(t + 0.1);
-}
-
-function sfxSplat(v = 1, pan = 0) {
-  if (!sfxGate(0, 0.1)) return;
-  const t = ac.currentTime;
-  const out = outChain(0.42 * v, pan * 0.5, 0.05);
-  for (let i = 0; i < 2; i++) {
-    const tt = t + i * rand(0.012, 0.03);
-    const n = noiseN(rand(0.8, 1.4));
-    const bp = filt('bandpass', rand(700, 1400), 2.2);
-    const g = gainN(0);
-    envAD(g.gain, tt, 0.001, rand(0.4, 0.8), rand(0.03, 0.06));
-    n.connect(bp).connect(g).connect(out);
-    n.start(tt, rand(0, 2));
-    n.stop(tt + 0.1);
-  }
-}
-
-function sfxFall(v = 1, pan = 0, lp = 0) {
-  if (!sfxGate(0, 0.25)) return;
-  const t = ac.currentTime;
-  const out = outChain(0.8 * v, pan * 0.5, 0.15, lp);
-  const o = oscN('sine', 78);
-  o.frequency.setValueAtTime(82, t);
-  o.frequency.exponentialRampToValueAtTime(34, t + 0.16);
-  const g = gainN(0);
-  envAD(g.gain, t, 0.003, 1, 0.2);
-  o.connect(g).connect(out);
-  o.start(t);
-  o.stop(t + 0.26);
-  const n = noiseN(0.6);
-  const l = filt('lowpass', 380, 0.8);
-  const g2 = gainN(0);
-  envAD(g2.gain, t, 0.002, 0.75, 0.12);
-  n.connect(l).connect(g2).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.16);
-}
-
-function sfxStab(pan = 0, v = 1) {
-  if (!sfxGate(2, 0.2)) return;
-  const t = ac.currentTime;
-  const out = outChain(0.95 * v, pan * 0.4, 0.2);
-  const n = noiseN();
-  const bp = filt('bandpass', 900, 2.4);
-  bp.frequency.setValueAtTime(900, t);
-  bp.frequency.exponentialRampToValueAtTime(4200, t + 0.07);
-  const g = gainN(0);
-  envAD(g.gain, t, 0.01, 0.5, 0.06);
-  n.connect(bp).connect(g).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.1);
-  const t2 = t + 0.055;
-  const n2 = noiseN(0.8);
-  const lp = filt('lowpass', 2000, 9);
-  lp.frequency.setValueAtTime(2200, t2);
-  lp.frequency.exponentialRampToValueAtTime(320, t2 + 0.13);
-  const g2 = gainN(0);
-  envAD(g2.gain, t2, 0.002, 1.0, 0.14);
-  n2.connect(lp).connect(g2).connect(out);
-  n2.start(t2, rand(0, 2));
-  n2.stop(t2 + 0.2);
-  const o = oscN('sine', 120);
-  o.frequency.setValueAtTime(130, t2);
-  o.frequency.exponentialRampToValueAtTime(55, t2 + 0.1);
-  const g3 = gainN(0);
-  envAD(g3.gain, t2, 0.002, 0.95, 0.12);
-  o.connect(g3).connect(out);
-  o.start(t2);
-  o.stop(t2 + 0.16);
-  const o2 = oscN('triangle', 5200);
-  const g4 = gainN(0);
-  envAD(g4.gain, t2 - 0.01, 0.001, 0.05, 0.05);
-  o2.connect(g4).connect(out);
-  o2.start(t2 - 0.01);
-  o2.stop(t2 + 0.06);
-}
-
-function sfxSwing(v = 1) {
-  if (!sfxGate(1, 0.25)) return;
-  const t = ac.currentTime;
-  const out = outChain(0.42 * v, 0, 0);
-  const n = noiseN(rand(0.9, 1.1));
-  const bp = filt('bandpass', 450, 1.6);
-  bp.frequency.setValueAtTime(420, t);
-  bp.frequency.exponentialRampToValueAtTime(2300, t + 0.11);
-  bp.frequency.exponentialRampToValueAtTime(900, t + 0.2);
-  const g = gainN(0);
-  g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(0.9, t + 0.08);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
-  n.connect(bp).connect(g).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.24);
-}
-// 붙잡히는 소리: 몸이 부딪히는 '쿵' + 옷을 움켜쥐는 '부스럭' + 짧은 '헉'
-function sfxGrab(pan = 0, v = 1) {
-  if (!sfxGate(v >= 1 ? 2 : 0, 0.18)) return;
-  const t = ac.currentTime;
-  const out = outChain(1.05 * v, pan * 0.5, 0.12);
-  const n = noiseN(0.5);
-  const lp = filt('lowpass', 700, 1);
-  const g = gainN(0);
-  envAD(g.gain, t, 0.008, 0.85, 0.11);
-  n.connect(lp).connect(g).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.16);
-  const o = oscN('sine', 140);
-  o.frequency.exponentialRampToValueAtTime(85, t + 0.08);
-  const g2 = gainN(0);
-  envAD(g2.gain, t, 0.004, 0.75, 0.09);
-  o.connect(g2).connect(out);
-  o.start(t);
-  o.stop(t + 0.12);
-  const n2 = noiseN(rand(1.0, 1.3));
-  const bp = filt('bandpass', 1300, 1.2);
-  bp.frequency.setValueAtTime(1700, t);
-  bp.frequency.exponentialRampToValueAtTime(650, t + 0.1);
-  const g3 = gainN(0);
-  envAD(g3.gain, t + 0.004, 0.003, 0.85, 0.09);
-  n2.connect(bp).connect(g3).connect(out);
-  n2.start(t, rand(0, 2));
-  n2.stop(t + 0.15);
-  const o2 = oscN('triangle', 330);
-  o2.frequency.setValueAtTime(360, t + 0.01);
-  o2.frequency.exponentialRampToValueAtTime(180, t + 0.1);
-  const g4 = gainN(0);
-  envAD(g4.gain, t + 0.01, 0.006, 0.4, 0.1);
-  o2.connect(g4).connect(out);
-  o2.start(t + 0.01);
-  o2.stop(t + 0.16);
-}
-
-function sfxHeart(v = 1) {
-  if (!sfxGate(3, 0.4)) return;
-  const t = ac.currentTime + 0.005;
-  const out = outChain(0.95 * v, 0, 0);
-  for (const [d, a] of [
-    [0, 1],
-    [0.16, 0.7]
-  ]) {
-    const o = oscN('sine', 62);
-    o.frequency.setValueAtTime(70, t + d);
-    o.frequency.exponentialRampToValueAtTime(42, t + d + 0.12);
-    const g = gainN(0);
-    envAD(g.gain, t + d, 0.006, a, 0.14);
-    o.connect(g).connect(out);
-    o.start(t + d);
-    o.stop(t + d + 0.18);
-  }
-}
-// 발소리: 장판(탁 + 가끔 쩍 달라붙음), 카펫(먹먹), 마루(딱딱하고 가벼움), 타일(또각)
-function sfxStep(surface, v = 1) {
-  if (!sfxGate(0, 0.12)) return;
-  const t = ac.currentTime;
-  const out = outChain(v, rand(-0.12, 0.12), surface === 'carpet' ? 0.04 : 0.12);
-  if (surface === 'vinyl') {
-    const n = noiseN(rand(0.55, 0.7));
-    const lp = filt('lowpass', rand(280, 360), 0.8);
-    const g = gainN(0);
-    envAD(g.gain, t, 0.005, 1.05, 0.08);
-    n.connect(lp).connect(g).connect(out);
-    n.start(t, rand(0, 2));
-    n.stop(t + 0.12);
-    const n2 = noiseN(rand(0.9, 1.15));
-    const bp = filt('bandpass', rand(1250, 1600), 1.6);
-    const g2 = gainN(0);
-    envAD(g2.gain, t + 0.004, 0.002, 0.5, 0.035);
-    n2.connect(bp).connect(g2).connect(out);
-    n2.start(t, rand(0, 2));
-    n2.stop(t + 0.07);
-    if (Math.random() < 0.35) {
-      const n3 = noiseN(1.2);
-      const hp = filt('bandpass', rand(2600, 3400), 2.2);
-      const g3 = gainN(0);
-      envAD(g3.gain, t + rand(0.05, 0.08), 0.003, 0.14, 0.022);
-      n3.connect(hp).connect(g3).connect(out);
-      n3.start(t, rand(0, 2));
-      n3.stop(t + 0.13);
-    }
-  } else if (surface === 'carpet') {
-    // 젖은 카펫: 둔한 쿵 + 휴대폰 스피커에서도 들리게 눅눅한 '척' 대역 + 천 스치는 소리
-    const n = noiseN(rand(0.5, 0.7));
-    const lp = filt('lowpass', rand(380, 520), 0.8);
-    const g = gainN(0);
-    envAD(g.gain, t, 0.008, 0.8, 0.1);
-    n.connect(lp).connect(g).connect(out);
-    n.start(t, rand(0, 2));
-    n.stop(t + 0.16);
-    const n3 = noiseN(rand(0.85, 1.1));
-    const bp3 = filt('bandpass', rand(820, 1050), 1.3);
-    const g3 = gainN(0);
-    envAD(g3.gain, t + 0.012, 0.004, 0.2, 0.05);
-    n3.connect(bp3).connect(g3).connect(out);
-    n3.start(t, rand(0, 2));
-    n3.stop(t + 0.09);
-    const n2 = noiseN(1.1);
-    const bp = filt('bandpass', 1900, 1.5);
-    const g2 = gainN(0);
-    envAD(g2.gain, t + 0.025, 0.01, 0.09, 0.07);
-    n2.connect(bp).connect(g2).connect(out);
-    n2.start(t, rand(0, 2));
-    n2.stop(t + 0.12);
-  } else {
-    const hard = surface === 'tile';
-    const n = noiseN(rand(0.9, 1.2));
-    const bp = filt('bandpass', hard ? rand(2400, 3000) : rand(1100, 1500), hard ? 3 : 2);
-    const g = gainN(0);
-    envAD(g.gain, t, 0.001, hard ? 0.5 : 0.4, hard ? 0.03 : 0.04);
-    n.connect(bp).connect(g).connect(out);
-    n.start(t, rand(0, 2));
-    n.stop(t + 0.06);
-    const o = oscN('sine', hard ? 180 : 120);
-    o.frequency.exponentialRampToValueAtTime(70, t + 0.06);
-    const g2 = gainN(0);
-    envAD(g2.gain, t, 0.002, 0.35, 0.06);
-    o.connect(g2).connect(out);
-    o.start(t);
-    o.stop(t + 0.09);
-  }
-}
-
-// 다가오는 사람 발소리: 젖은 카펫을 끄는 소리 (뛰는 사람은 짧고 세게)
-function sfxCrowdStep(v, pan, runner) {
-  if (!sfxGate(0, 0.12)) return;
-  const t = ac.currentTime;
-  const out = outChain(v, pan, 0.1);
-  const n = noiseN(rand(0.5, 0.7));
-  const lp = filt('lowpass', rand(420, 560), 0.8);
-  const g = gainN(0);
-  envAD(g.gain, t, runner ? 0.004 : 0.012, 0.85, runner ? 0.07 : 0.12);
-  n.connect(lp).connect(g).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.18);
-  const n2 = noiseN(rand(0.85, 1.05));
-  const bp = filt('bandpass', rand(850, 1150), 1.2);
-  const g2 = gainN(0);
-  envAD(g2.gain, t + 0.01, 0.004, runner ? 0.3 : 0.22, 0.05);
-  n2.connect(bp).connect(g2).connect(out);
-  n2.start(t, rand(0, 2));
-  n2.stop(t + 0.1);
-  if (!runner) {
-    const n3 = noiseN(1);
-    const bp3 = filt('bandpass', 2200, 1.4);
-    const g3 = gainN(0);
-    envAD(g3.gain, t + 0.05, 0.03, 0.06, 0.09);
-    n3.connect(bp3).connect(g3).connect(out);
-    n3.start(t, rand(0, 2));
-    n3.stop(t + 0.2);
-  }
-}
-
-// ── 누운 사람이 장판 위로 끌려오는 소리 ──
-// 몸이 비닐 장판에 쓸리는 '쓰으윽'이 끊기지 않고 이어지고, 가끔 살갗이 장판에 붙었다 떨어지며 '찌익'
-const DRAG = {
-  v: []
-};
-
-function dragVoice() {
-  const t = ac.currentTime;
-  const n = noiseN(rand(0.85, 1.1));
-  const body = filt('bandpass', 560, 0.75),
-    low = filt('lowpass', 240, 0.7),
-    lowG = gainN(0.9);
-  const lp = filt('lowpass', 2400, 0.7),
-    g = gainN(0);
-  n.connect(body).connect(lp);
-  n.connect(low).connect(lowG).connect(lp);
-  // 찌익: 톱니파를 좁은 대역으로 (평소엔 꺼 둠)
-  const sq = oscN('sawtooth', 900),
-    sqB = filt('bandpass', 1500, 7),
-    sqG = gainN(0);
-  sq.connect(sqB).connect(sqG).connect(lp);
-  lp.connect(g);
-  let pn = null;
-  if (ac.createStereoPanner) {
-    pn = ac.createStereoPanner();
-    g.connect(pn);
-    pn.connect(A.sfx);
-  } else g.connect(A.sfx);
-  const vs = gainN(0.3);
-  g.connect(vs);
-  vs.connect(A.verb);
-  n.start(t, rand(0, 2));
-  sq.start(t);
-  return {
-    n,
-    sq,
-    sqB,
-    sqG,
-    lp,
-    g,
-    pn,
-    p: null,
-    lv: 0,
-    target: 0,
-    pan: 0,
-    occl: false,
-    ph: rand(0, 10),
-    sqT: rand(0.4, 1.5)
-  };
-}
-
-function dragAssign(items, dt = 1 / 60) {
-  if (!ok()) return;
-  const t = ac.currentTime;
-  for (const v of DRAG.v)
-    if (v.p && !items.some((it) => it.p === v.p)) v.p = null;
-  for (const it of items) {
-    let v = DRAG.v.find((q) => q.p === it.p);
-    if (!v) {
-      v = DRAG.v.find((q) => !q.p && q.lv < 0.03);
-      if (!v && DRAG.v.length < 3) {
-        v = dragVoice();
-        DRAG.v.push(v);
-      }
-      if (!v) continue;
-      v.p = it.p;
-    }
-    v.target = it.lv;
-    v.pan = it.pan;
-    v.occl = it.occl;
-  }
-  for (const v of DRAG.v) {
-    const tgt = v.p ? v.target : 0;
-    v.lv += (tgt - v.lv) * (1 - Math.exp(-dt * (tgt > v.lv ? 9 : 5)));
-    // 고르지 않게 미끄러짐: 느리게 출렁이고 가끔 턱 걸린다
-    v.ph += dt * (1.2 + v.lv * 2.6);
-    const wob = 0.66 + 0.34 * Math.sin(v.ph * 2.3) * Math.sin(v.ph * 0.71 + 1.3);
-    v.g.gain.setTargetAtTime(v.lv * 0.62 * wob, t, 0.045);
-    v.lp.frequency.setTargetAtTime(v.occl ? 650 : 2600, t, 0.12);
-    if (v.pn) v.pn.pan.setTargetAtTime(THREE.MathUtils.clamp(v.pan, -1, 1), t, 0.05);
-    v.sqT -= dt;
-    if (v.sqT <= 0) {
-      v.sqT = rand(0.5, 1.8);
-      if (v.lv > 0.08) {
-        const f = rand(700, 1150),
-          d = rand(0.07, 0.17);
-        v.sq.frequency.cancelScheduledValues(t);
-        v.sq.frequency.setValueAtTime(f, t);
-        v.sq.frequency.exponentialRampToValueAtTime(f * rand(0.62, 0.8), t + d);
-        v.sqB.frequency.setValueAtTime(f * 1.6, t);
-        v.sqG.gain.cancelScheduledValues(t);
-        v.sqG.gain.setValueAtTime(0.0001, t);
-        v.sqG.gain.exponentialRampToValueAtTime(0.42 * Math.min(1, v.lv * 1.6), t + 0.012);
-        v.sqG.gain.setValueAtTime(0.3 * Math.min(1, v.lv * 1.6), t + d * 0.6);
-        v.sqG.gain.exponentialRampToValueAtTime(0.0001, t + d);
-      }
-    }
-  }
-}
-
-function sfxDragStop(p) {
-  if (!ac) return;
-  for (const v of DRAG.v)
-    if (v.p === p) {
-      v.p = null;
-      v.lv = 0;
-      try {
-        v.g.gain.setTargetAtTime(0, ac.currentTime, 0.03);
-      } catch { }
-    }
-}
-
-function sfxDragAllStop() {
-  if (!ac) return;
-  for (const v of DRAG.v) {
-    v.p = null;
-    v.lv = 0;
-    try {
-      v.g.gain.setTargetAtTime(0, ac.currentTime, 0.03);
-    } catch { }
-  }
-}
-
-// 방문이 벽까지 쾅 열림: 나무 울림 + 낮은 쿵 + 손잡이 덜컹
-function sfxDoorBang(pan = 0, v = 1, lp = 0) {
-  if (!sfxGate(2, 0.5)) return;
-  const t = ac.currentTime + 0.005;
-  const out = outChain(1.1 * v, pan * 0.7, 0.55, lp);
-  const o = oscN('sine', 92);
-  o.frequency.setValueAtTime(110, t);
-  o.frequency.exponentialRampToValueAtTime(48, t + 0.22);
-  const g = gainN(0);
-  envAD(g.gain, t, 0.003, 1.0, 0.26);
-  o.connect(g).connect(out);
-  o.start(t);
-  o.stop(t + 0.32);
-  const n = noiseN(rand(0.8, 1.0));
-  const bp = filt('bandpass', rand(620, 760), 1.4);
-  const g2 = gainN(0);
-  envAD(g2.gain, t, 0.002, 1.0, 0.16);
-  n.connect(bp).connect(g2).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.22);
-  const n2 = noiseN(0.5);
-  const l2 = filt('lowpass', 400, 0.8);
-  const g3 = gainN(0);
-  envAD(g3.gain, t, 0.004, 0.8, 0.3);
-  n2.connect(l2).connect(g3).connect(out);
-  n2.start(t, rand(0, 2));
-  n2.stop(t + 0.36);
-  for (const [d, f, a] of [
-    [0.05, 2600, 0.5],
-    [0.09, 3400, 0.35],
-    [0.14, 2200, 0.25]
-  ]) sfxClick(t + d, f, a * v, 0.02, 6);
-}
-// 의자에서 일어남: 바퀴 의자 끼익 + 바퀴 구르는 소리
-function sfxChair(pan = 0, v = 1) {
-  if (!sfxGate(1, 0.6)) return;
-  const t = ac.currentTime;
-  const out = outChain(0.5 * v, pan * 0.7, 0.3);
-  const o = oscN('sawtooth', 520);
-  o.frequency.setValueAtTime(480, t);
-  o.frequency.linearRampToValueAtTime(690, t + 0.12);
-  o.frequency.linearRampToValueAtTime(560, t + 0.26);
-  const b = filt('bandpass', 1300, 5),
-    g = gainN(0);
-  g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(0.5, t + 0.03);
-  g.gain.setValueAtTime(0.35, t + 0.18);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
-  o.connect(b).connect(g).connect(out);
-  o.start(t);
-  o.stop(t + 0.32);
-  const n = noiseN(0.7),
-    l = filt('bandpass', 380, 1.1),
-    g2 = gainN(0);
-  g2.gain.setValueAtTime(0.0001, t + 0.08);
-  g2.gain.exponentialRampToValueAtTime(0.45, t + 0.16);
-  g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.62);
-  n.connect(l).connect(g2).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.66);
-}
-
-// ── 문 ──
-// 디지털 도어락 '띠리리릭' → 모터 → 걸쇠
-function sfxLock(t) {
-  if (!ok()) return;
-  const out = outChain(0.32, 0, 0.12);
-  [1318.5, 1568, 1975.5, 2637].forEach((f, i) => {
-    const tt = t + i * 0.07;
-    const o = oscN('square', f),
-      g = gainN(0);
-    envAD(g.gain, tt, 0.002, 0.5, 0.06);
-    const lp = filt('lowpass', 5000, 0.7);
-    o.connect(lp).connect(g).connect(out);
-    o.start(tt);
-    o.stop(tt + 0.09);
-  });
-  const tm = t + 0.34;
-  const m = oscN('sawtooth', 150);
-  m.frequency.setValueAtTime(140, tm);
-  m.frequency.linearRampToValueAtTime(210, tm + 0.26);
-  const mb = filt('bandpass', 900, 2);
-  const mg = gainN(0);
-  mg.gain.setValueAtTime(0.0001, tm);
-  mg.gain.exponentialRampToValueAtTime(0.25, tm + 0.04);
-  mg.gain.setValueAtTime(0.25, tm + 0.22);
-  mg.gain.exponentialRampToValueAtTime(0.0001, tm + 0.28);
-  m.connect(mb).connect(mg).connect(out);
-  m.start(tm);
-  m.stop(tm + 0.3);
-  sfxClick(tm + 0.3, 1200, 0.8, 0.04, 2);
-  sfxClick(tm + 0.33, 2600, 0.5, 0.025, 6);
-}
-
-function sfxLatch(t, v = 1) {
-  if (!ok()) return;
-  sfxClick(t, 900, 0.7 * v, 0.05, 2);
-  sfxClick(t + 0.03, 2400, 0.45 * v, 0.03, 6);
-}
-// 잠긴 현관문 손잡이를 덜컹덜컹
-function sfxRattle() {
-  if (!ok()) return;
-  const t = ac.currentTime + 0.01;
-  for (const [d, v] of [
-    [0, 1],
-    [0.12, 0.85],
-    [0.23, 0.6]
-  ]) {
-    const out = outChain(0.6 * v, 0, 0.3);
-    const n = noiseN(0.75);
-    const lp = filt('lowpass', 950, 1.4);
-    const g = gainN(0);
-    envAD(g.gain, t + d, 0.002, 1, 0.075);
-    n.connect(lp).connect(g).connect(out);
-    n.start(t + d, rand(0, 2));
-    n.stop(t + d + 0.11);
-    const o = oscN('sine', 120);
-    o.frequency.setValueAtTime(150, t + d);
-    o.frequency.exponentialRampToValueAtTime(70, t + d + 0.06);
-    const g2 = gainN(0);
-    envAD(g2.gain, t + d, 0.002, 0.7, 0.07);
-    o.connect(g2).connect(out);
-    o.start(t + d);
-    o.stop(t + d + 0.1);
-    sfxClick(t + d + 0.004, 1700, 0.55 * v, 0.03, 4);
-    sfxClick(t + d + 0.02, 3100, 0.32 * v, 0.02, 7);
-  }
-}
-// 경첩이 끼익: 마찰음이 띄엄띄엄 미끄러지는 소리
-function sfxCreak(t, dur, v = 1, f0 = 150) {
-  if (!ok()) return;
-  const out = outChain(0.55 * v, 0, 0.45);
-  const N = 256;
-  const fc = new Float32Array(N),
-    gc = new Float32Array(N);
-  let fr = f0,
-    stick = 0;
-  for (let i = 0; i < N; i++) {
-    const k = i / (N - 1);
-    fr += rand(-14, 14);
-    fr = THREE.MathUtils.clamp(fr, f0 * 0.7, f0 * 1.6);
-    stick = Math.random() < 0.18 ? rand(0.2, 1) : stick * 0.8;
-    fc[i] = fr * (1 + 0.35 * Math.sin(k * 9.0));
-    gc[i] = Math.max(0.0001, (0.25 + 0.75 * stick) * Math.sin(Math.PI * Math.min(1, k * 1.08)) * (k < 0.04 ? k / 0.04 : 1));
-  }
-  const o = oscN('sawtooth', f0);
-  o.frequency.setValueCurveAtTime(fc, t, dur);
-  const b1 = filt('bandpass', 950, 7),
-    b2 = filt('bandpass', 2300, 9),
-    g = gainN(0);
-  g.gain.setValueCurveAtTime(gc, t, dur);
-  const mix = gainN(1);
-  o.connect(b1).connect(mix);
-  o.connect(b2).connect(mix);
-  mix.connect(g).connect(out);
-  o.start(t);
-  o.stop(t + dur + 0.05);
-  const n = noiseN(0.4);
-  const l = filt('lowpass', 260, 0.7);
-  const g2 = gainN(0);
-  envAD(g2.gain, t, 0.3, 0.12, dur);
-  n.connect(l).connect(g2).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + dur + 0.4);
-}
-// 센서등 '딸깍' + 켜지는 잡음
-function sfxSensor(t) {
-  if (!ok()) return;
-  sfxClick(t, 3200, 0.45, 0.012, 9);
-  sfxClick(t + 0.018, 1400, 0.25, 0.02, 4);
-}
-// 형광등이 깜빡일 때 지직
-function sfxFlick(v = 1, pan = 0) {
-  if (!sfxGate(0, 0.18)) return;
-  const t = ac.currentTime;
-  const out = outChain(0.22 * v, pan * 0.6, 0.15);
-  const n = noiseN(rand(0.9, 1.4));
-  const bp = filt('bandpass', rand(2600, 4200), 2.5);
-  const g = gainN(0);
-  g.gain.setValueAtTime(0.0001, t);
-  let tt = t;
-  for (let i = 0; i < 5; i++) {
-    g.gain.setValueAtTime(rand(0.3, 1), tt);
-    tt += rand(0.008, 0.025);
-    g.gain.setValueAtTime(0.0001, tt);
-    tt += rand(0.004, 0.02);
-  }
-  n.connect(bp).connect(g).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(tt + 0.02);
-  const o = oscN('sawtooth', 120);
-  const ob = filt('bandpass', 480, 3);
-  const og = gainN(0);
-  envAD(og.gain, t, 0.004, 0.35, 0.1);
-  o.connect(ob).connect(og).connect(out);
-  o.start(t);
-  o.stop(t + 0.14);
-}
-// 차단기가 떨어짐: '텅' + 전기 튀는 소리
-function sfxBreaker() {
-  if (!ok()) return;
-  const t = ac.currentTime + 0.01;
-  const out = outChain(1.15, 0, 1.2);
-  const o = oscN('sine', 58);
-  o.frequency.setValueAtTime(70, t);
-  o.frequency.exponentialRampToValueAtTime(28, t + 0.7);
-  const g = gainN(0);
-  envAD(g.gain, t, 0.004, 1.4, 0.9);
-  o.connect(g).connect(out);
-  o.start(t);
-  o.stop(t + 1.1);
-  const n = noiseN(0.6);
-  const l = filt('lowpass', 900, 0.8);
-  l.frequency.setValueAtTime(1600, t);
-  l.frequency.exponentialRampToValueAtTime(90, t + 0.6);
-  const g2 = gainN(0);
-  envAD(g2.gain, t, 0.002, 1.0, 0.55);
-  n.connect(l).connect(g2).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.8);
-  const z = noiseN(1.6);
-  const zb = filt('bandpass', 3800, 1.5);
-  zb.frequency.setValueAtTime(5200, t);
-  zb.frequency.exponentialRampToValueAtTime(700, t + 0.35);
-  const zg = gainN(0);
-  zg.gain.setValueAtTime(0.0001, t);
-  let tt = t;
-  for (let i = 0; i < 9; i++) {
-    zg.gain.setValueAtTime(rand(0.2, 0.7), tt);
-    tt += rand(0.01, 0.04);
-    zg.gain.setValueAtTime(0.0001, tt);
-    tt += rand(0.004, 0.02);
-  }
-  z.connect(zb).connect(zg).connect(out);
-  z.start(t, rand(0, 2));
-  z.stop(tt + 0.05);
-}
-// 무기를 집어 듦: 펌프 + 짧은 낮은 울림
-function sfxGetGun() {
-  if (!ok()) return;
-  const t = ac.currentTime;
-  sfxPump(0.05);
-  const out = outChain(0.8, 0, 0.9);
-  const o = oscN('sawtooth', 55);
-  const l = filt('lowpass', 420, 2);
-  const g = gainN(0);
-  envAD(g.gain, t, 0.02, 0.6, 1.4);
-  o.connect(l).connect(g).connect(out);
-  o.start(t);
-  o.stop(t + 1.6);
-  const o2 = oscN('sine', 82.4);
-  const g2 = gainN(0);
-  envAD(g2.gain, t, 0.02, 0.5, 1.6);
-  o2.connect(g2).connect(out);
-  o2.start(t);
-  o2.stop(t + 1.8);
-}
-// 문 밖 하얀 공간으로 나갈 때
-function sfxOut() {
-  if (!ok()) return;
-  const t = ac.currentTime;
-  sfxLatch(t, 1.2);
-  const out = outChain(0.6, 0, 0.7);
-  const n = noiseN();
-  const bp = filt('bandpass', 400, 0.8);
-  bp.frequency.setValueAtTime(300, t);
-  bp.frequency.exponentialRampToValueAtTime(5000, t + 1.1);
-  const g = gainN(0);
-  g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(0.7, t + 0.9);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + 1.5);
-  n.connect(bp).connect(g).connect(out);
-  n.start(t, rand(0, 2));
-  n.stop(t + 1.6);
-}
-
-// ── 형광등 웅 ──
-const HUM = {
-  on: false
-};
-
-function humStart() {
-  if (HUM.on || !ac) return;
-  const t = ac.currentTime;
-  HUM.g = gainN(0);
-  HUM.lp = filt('lowpass', 380, 0.5);
-  const o1 = oscN('sawtooth', 120);
-  const b1 = filt('bandpass', 360, 0.9);
-  const g1 = gainN(0.22);
-  o1.connect(b1).connect(g1).connect(HUM.lp);
-  const o2 = oscN('square', 240);
-  const b2 = filt('bandpass', 960, 3.5);
-  const g2 = gainN(0.05);
-  o2.connect(b2).connect(g2).connect(HUM.lp);
-  const o3 = oscN('sine', 120);
-  const g3 = gainN(0.2);
-  o3.connect(g3).connect(HUM.lp);
-  const n = noiseN();
-  const hp = filt('highpass', 5200, 0.7);
-  const g4 = gainN(0.014);
-  n.connect(hp).connect(g4).connect(HUM.lp);
-  HUM.lp.connect(HUM.g);
-  HUM.g.connect(A.sfx);
-  const lfo = oscN('sine', 0.23);
-  const lg = gainN(0.012);
-  lfo.connect(lg).connect(HUM.g.gain);
-  for (const s of [o1, o2, o3, n, lfo]) s.start(t);
-  HUM.src = [o1, o2, o3, n, lfo];
-  HUM.tone = [o1, o2, o3];
-  HUM.on = true;
-  HUM.dead = false;
-}
-
-function humSet(level, open) {
-  if (!HUM.on) return;
-  const t = ac.currentTime;
-  HUM.g.gain.setTargetAtTime(HUM.dead ? 0 : level * 0.17, t, 0.07);
-  HUM.lp.frequency.setTargetAtTime(open ? 3600 : 330, t, 0.25);
-}
-
-function humKill() {
-  if (!HUM.on || HUM.dead) return;
-  HUM.dead = true;
-  const t = ac.currentTime;
-  for (const o of HUM.tone) {
-    o.frequency.cancelScheduledValues(t);
-    o.frequency.setValueAtTime(o.frequency.value, t);
-    o.frequency.exponentialRampToValueAtTime(o.frequency.value * 0.45, t + 0.8);
-  }
-  HUM.g.gain.cancelScheduledValues(t);
-  HUM.g.gain.setValueAtTime(HUM.g.gain.value, t);
-  HUM.g.gain.linearRampToValueAtTime(0, t + 0.85);
-}
-
-function humStop() {
-  if (!HUM.on) return;
-  const t = ac.currentTime;
-  try {
-    for (const s of HUM.src) s.stop(t + 0.05);
-  } catch { }
-  HUM.on = false;
-}
-
-// ── 목소리 ──
-function voicesPlaying() {
-  let n = 0;
-  for (const h of activeVoices)
-    if (!h.stopped) n++;
-  return n;
-}
-
-function playVoice(key, o = {}) {
-  if (!ok() || !VO[key]) return null;
-  const buf = VO[key];
-  const rate = o.rate || 1;
-  const src = ac.createBufferSource();
-  src.buffer = buf;
-  src.playbackRate.value = rate;
-  const g = gainN(o.gain === undefined ? 1 : o.gain);
-  let node = src;
-  let lfo = null,
-    lfo2 = null;
-  if (o.sob) {
-    lfo = oscN('sine', rand(5.6, 7.4));
-    const lg = gainN(o.sob * rate);
-    lfo.connect(lg);
-    lg.connect(src.playbackRate);
-    const trem = gainN(0.78);
-    lfo2 = oscN('sine', rand(4.5, 6));
-    const tg = gainN(0.22);
-    lfo2.connect(tg);
-    tg.connect(trem.gain);
-    node.connect(trem);
-    node = trem;
-    lfo.start();
-    lfo2.start();
-  }
-  if (o.lp) {
-    const f = filt('lowpass', o.lp, 0.7);
-    node.connect(f);
-    node = f;
-  }
-  node.connect(g);
-  let tail = g;
-  if (ac.createStereoPanner) {
-    const p = ac.createStereoPanner();
-    p.pan.value = THREE.MathUtils.clamp(o.pan || 0, -1, 1);
-    g.connect(p);
-    tail = p;
-  }
-  tail.connect(A.voice);
-  const vs = gainN(o.verb === undefined ? 0.3 : o.verb);
-  g.connect(vs);
-  vs.connect(A.verb);
-  const t0 = ac.currentTime + (o.delay || 0);
-  src.start(t0);
-  const h = {
-    key,
-    src,
-    g,
-    t0,
-    rate,
-    dur: buf.duration / rate,
-    stopped: false,
-    stop(fast = 0.012) {
-      if (h.stopped) return;
-      h.stopped = true;
-      const t = ac.currentTime;
-      try {
-        g.gain.cancelScheduledValues(t);
-        g.gain.setValueAtTime(g.gain.value, t);
-        g.gain.linearRampToValueAtTime(0, t + fast);
-        src.stop(t + fast + 0.01);
-      } catch { }
-      try {
-        if (lfo) lfo.stop(t + fast + 0.02);
-        if (lfo2) lfo2.stop(t + fast + 0.02);
-      } catch { }
-    },
-  };
-  src.onended = () => {
-    h.stopped = true;
-    activeVoices.delete(h);
-    try {
-      if (lfo) lfo.stop();
-      if (lfo2) lfo2.stop();
-    } catch { }
-  };
-  activeVoices.add(h);
-  return h;
-}
-
-function stopAllVoices() {
-  for (const h of activeVoices) h.stop(0.05);
-  activeVoices.clear();
-}
-
 
 // ───────────────────────── 캔버스 텍스처 ─────────────────────────
 function cnv(w, h) {
@@ -1381,51 +135,30 @@ function cnv(w, h) {
 function texOf(c, o = {}) {
   const t = new THREE.CanvasTexture(c);
   if (o.srgb !== false) t.colorSpace = THREE.SRGBColorSpace;
-  if (o.repeat) {
-    t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  }
+  if (o.repeat) t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy ? renderer.capabilities.getMaxAnisotropy() : 4);
   return t;
 }
-// 시드 있는 난수 (텍스처가 매번 같은 모양이 되게)
-function rng(seed) {
-  let s = seed >>> 0;
-  return () => {
-    s = (s + 0x6D2B79F5) >>> 0;
-    let t = s;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+
 // 이어지는 값 잡음 (타일링)
 function tileNoise(n, cells, seed) {
-  const R = rng(seed),
-    g = [];
+  const R = seeded(seed), g = [];
   for (let i = 0; i < cells * cells; i++) g.push(R());
   const out = new Float32Array(n * n);
   for (let y = 0; y < n; y++)
     for (let x = 0; x < n; x++) {
-      const fx = x / n * cells,
-        fy = y / n * cells;
-      const x0 = Math.floor(fx),
-        y0 = Math.floor(fy),
-        tx = fx - x0,
-        ty = fy - y0;
-      const sx = tx * tx * (3 - 2 * tx),
-        sy = ty * ty * (3 - 2 * ty);
+      const fx = x / n * cells, fy = y / n * cells;
+      const x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
+      const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty);
       const at = (i, j) => g[((j % cells) * cells + (i % cells))];
-      const a = at(x0, y0),
-        b = at(x0 + 1, y0),
-        c = at(x0, y0 + 1),
-        d = at(x0 + 1, y0 + 1);
+      const a = at(x0, y0), b = at(x0 + 1, y0), c = at(x0, y0 + 1), d = at(x0 + 1, y0 + 1);
       out[y * n + x] = THREE.MathUtils.lerp(THREE.MathUtils.lerp(a, b, sx), THREE.MathUtils.lerp(c, d, sx), sy);
     }
   return out;
 }
 
 function grain(g, w, h, amt, seed, mono = true) {
-  const R = rng(seed);
+  const R = seeded(seed);
   const img = g.getImageData(0, 0, w, h),
     d = img.data;
   for (let i = 0; i < d.length; i += 4) {
@@ -1453,9 +186,7 @@ function makeFloorTex() {
   g.fillRect(0, 0, N, N);
   const nz = tileNoise(N, 6, 15),
     nz2 = tileNoise(N, 17, 16);
-  const img = g.getImageData(0, 0, N, N),
-    d = img.data,
-    R = rng(17);
+  const img = g.getImageData(0, 0, N, N), d = img.data, R = seeded(17);
   for (let y = 0; y < N; y++)
     for (let x = 0; x < N; x++) {
       const i = y * N + x;
@@ -1491,9 +222,7 @@ function makeFloorTex() {
   g.fillRect(0, 0, N, 2);
   g.fillStyle = 'rgba(255, 225, 160, 0.25)';
   g.fillRect(0, 2, N, 1);
-  return texOf(c, {
-    repeat: true
-  });
+  return texOf(c, { repeat: true });
 }
 // 복도 벽지: 누렇게 바랜 크림색 바탕에 마름모 다마스크 (1m)
 function makeCorWallTex() {
@@ -1502,13 +231,12 @@ function makeCorWallTex() {
     g = c.getContext('2d');
   g.fillStyle = '#e9dcbf';
   g.fillRect(0, 0, N, N);
-  const R = rng(81);
+  const R = seeded(81);
   g.strokeStyle = 'rgba(176, 150, 104, 0.5)';
   g.lineWidth = 2;
   for (let row = -1; row < 9; row++)
     for (let col = -1; col < 9; col++) {
-      const cx = col * 64 + (row % 2 ? 32 : 0),
-        cy = row * 64;
+      const cx = col * 64 + (row % 2 ? 32 : 0), cy = row * 64;
       g.beginPath();
       g.moveTo(cx, cy - 26);
       g.lineTo(cx + 22, cy);
@@ -1520,12 +248,7 @@ function makeCorWallTex() {
       g.beginPath();
       g.arc(cx, cy, 3.2, 0, TAU);
       g.fill();
-      for (const [dx, dy] of [
-        [0, -14],
-        [10, 0],
-        [0, 14],
-        [-10, 0]
-      ]) {
+      for (const [dx, dy] of [[0, -14], [10, 0], [0, 14], [-10, 0]]) {
         g.beginPath();
         g.arc(cx + dx, cy + dy, 1.4, 0, TAU);
         g.fill();
@@ -1536,9 +259,7 @@ function makeCorWallTex() {
     g.fillRect(R() * N, R() * N, R() * 14 + 2, 1);
   }
   grain(g, N, N, 8, 82, false);
-  const t = texOf(c, {
-    repeat: true
-  });
+  const t = texOf(c, { repeat: true });
   t.generateMipmaps = true;
   return t;
 }
@@ -1549,7 +270,6 @@ function makeRoomWallTex() {
     g = c.getContext('2d');
   g.fillStyle = '#e6e1cf';
   g.fillRect(0, 0, N, N);
-  const R = rng(91);
   for (let row = 0; row < 8; row++)
     for (let col = 0; col < 8; col++) {
       const cx = col * 64 + (row % 2 ? 32 : 0) + 4,
@@ -1577,9 +297,7 @@ function makeRoomWallTex() {
       g.fill();
     }
   grain(g, N, N, 7, 92, false);
-  const t = texOf(c, {
-    repeat: true
-  });
+  const t = texOf(c, { repeat: true });
   t.generateMipmaps = true;
   return t;
 }
@@ -1590,7 +308,7 @@ function makeCeilingTex() {
     g = c.getContext('2d');
   g.fillStyle = '#ece8dc';
   g.fillRect(0, 0, N, N);
-  const R = rng(33);
+  const R = seeded(33);
   for (let i = 0; i < 4000; i++) {
     g.fillStyle = `rgba(120, 110, 90, ${R() * 0.3})`;
     g.fillRect(R() * N, R() * N, R() * 1.6 + 0.5, R() * 1.6 + 0.5);
@@ -1598,9 +316,7 @@ function makeCeilingTex() {
   g.fillStyle = 'rgba(150, 140, 120, 0.6)';
   g.fillRect(0, 0, N, 3);
   g.fillRect(0, 0, 3, N);
-  return texOf(c, {
-    repeat: true
-  });
+  return texOf(c, { repeat: true });
 }
 // 형광등 (가운데 관은 밝고 양옆은 철판)
 function makeTubeTex() {
@@ -1624,7 +340,7 @@ function makeGosiDoorTex() {
     g = c.getContext('2d');
   g.fillStyle = '#7b5234';
   g.fillRect(0, 0, 256, 512);
-  const R = rng(101);
+  const R = seeded(101);
   for (let i = 0; i < 70; i++) {
     const x = R() * 256;
     g.strokeStyle = `rgba(${R() < 0.5 ? '60, 36, 20' : '150, 104, 66'}, ${0.12 + R() * 0.18})`;
@@ -1644,8 +360,7 @@ function makeGosiDoorTex() {
   return texOf(c);
 }
 // 호수 판 (301~396)
-const NUM_COLS = 12,
-  NUM_ROWS = 8;
+const NUM_COLS = 12, NUM_ROWS = 8;
 
 function makeNumAtlas() {
   const c = cnv(1536, 512),
@@ -1683,9 +398,7 @@ function makeKitchenWallTex() {
   g.fillStyle = '#9fae96';
   g.fillRect(0, tileTop - 6, 256, 6);
   grain(g, 256, 512, 6, 111);
-  return texOf(c, {
-    repeat: true
-  });
+  return texOf(c, { repeat: true });
 }
 // 샤워실 타일 (0.15m, 파랑·흰색)
 function makeShowerTileTex() {
@@ -1694,7 +407,7 @@ function makeShowerTileTex() {
     g = c.getContext('2d');
   g.fillStyle = '#8fa3ad';
   g.fillRect(0, 0, N, N);
-  const R = rng(121);
+  const R = seeded(121);
   for (let i = 0; i < 8; i++)
     for (let j = 0; j < 8; j++) {
       const blue = (i * 3 + j * 5) % 7 === 0;
@@ -1707,9 +420,7 @@ function makeShowerTileTex() {
     g.arc(R() * N, R() * N, R() * 8, 0, TAU);
     g.fill();
   }
-  return texOf(c, {
-    repeat: true
-  });
+  return texOf(c, { repeat: true });
 }
 // 공지 게시판
 function makeNoticeTex() {
@@ -1725,7 +436,7 @@ function makeNoticeTex() {
     [40, 200, 200, 150, ['택배는', '각자 찾아가세요']],
     [266, 196, 214, 156, ['복도에서', '통화 자제', '부탁드립니다']],
   ];
-  const R = rng(131);
+  const R = seeded(131);
   for (const [x, y, w, h, lines] of papers) {
     g.save();
     g.translate(x + w / 2, y + h / 2);
@@ -1767,9 +478,7 @@ function makeBlanketTex() {
     g.fillRect(0, k * 32 + 20, N, 3);
   }
   grain(g, N, N, 10, 141);
-  return texOf(c, {
-    repeat: true
-  });
+  return texOf(c, { repeat: true });
 }
 // 모니터 화면 (영상 보다 켜 둔 것처럼)
 function makeScreenTex() {
@@ -1797,7 +506,7 @@ function makeBoxTex() {
     g = c.getContext('2d');
   g.fillStyle = '#c4935a';
   g.fillRect(0, 0, 256, 256);
-  const R = rng(151);
+  const R = seeded(151);
   for (let i = 0; i < 600; i++) {
     g.fillStyle = `rgba(120, 80, 40, ${R() * 0.12})`;
     g.fillRect(R() * 256, R() * 256, R() * 20, 1);
@@ -1821,9 +530,7 @@ function makeGlowTex() {
   gr.addColorStop(1, 'rgba(255,255,255,0)');
   g.fillStyle = gr;
   g.fillRect(0, 0, 128, 128);
-  return texOf(c, {
-    srgb: false
-  });
+  return texOf(c, { srgb: false });
 }
 
 function makeDirtTex() {
@@ -1839,10 +546,7 @@ function makeDirtTex() {
     img.data[i * 4 + 3] = 255;
   }
   g.putImageData(img, 0, 0);
-  return texOf(c, {
-    repeat: true,
-    srgb: false
-  });
+  return texOf(c, { repeat: true, srgb: false });
 }
 // 집: 실크 벽지 (1m)
 function makeHomeWallTex() {
@@ -1851,22 +555,20 @@ function makeHomeWallTex() {
     g = c.getContext('2d');
   g.fillStyle = '#f2e3c9';
   g.fillRect(0, 0, N, N);
-  const R = rng(44);
+  const R = seeded(44);
   for (let i = 0; i < 1600; i++) {
     g.fillStyle = `rgba(150, 130, 100, ${R() * 0.12})`;
     g.fillRect(R() * N, R() * N, R() * 18 + 2, 1);
   }
   grain(g, N, N, 7, 45);
-  return texOf(c, {
-    repeat: true
-  });
+  return texOf(c, { repeat: true });
 }
 // 마루 (2m × 2m, 판자 폭 0.2m)
 function makeWoodTex() {
   const N = 512,
     c = cnv(N, N),
     g = c.getContext('2d');
-  const R = rng(55);
+  const R = seeded(55);
   for (let r = 0; r < 10; r++) {
     const y = r * 51.2,
       off = R() * N;
@@ -1891,9 +593,7 @@ function makeWoodTex() {
     g.fillRect(0, y, N, 2);
   }
   grain(g, N, N, 10, 56);
-  return texOf(c, {
-    repeat: true
-  });
+  return texOf(c, { repeat: true });
 }
 // 현관 타일 (0.6m에 두 장씩)
 function makeTileTex() {
@@ -1902,7 +602,7 @@ function makeTileTex() {
     g = c.getContext('2d');
   g.fillStyle = '#8f8a82';
   g.fillRect(0, 0, N, N);
-  const R = rng(66);
+  const R = seeded(66);
   for (let i = 0; i < 2; i++)
     for (let j = 0; j < 2; j++) {
       const v = 196 + R() * 10;
@@ -1916,9 +616,7 @@ function makeTileTex() {
       }
     }
   grain(g, N, N, 8, 67);
-  return texOf(c, {
-    repeat: true
-  });
+  return texOf(c, { repeat: true });
 }
 // 방문 (흰 문짝에 패널 홈)
 function makeDoorTex(dark) {
@@ -2033,9 +731,7 @@ function makeBlobTex() {
   gr.addColorStop(1, 'rgba(0,0,0,0)');
   g.fillStyle = gr;
   g.fillRect(0, 0, 128, 128);
-  return texOf(c, {
-    srgb: false
-  });
+  return texOf(c, { srgb: false });
 }
 
 // ── 군중 얼굴 (3×2 아틀라스, 칸 512: 우는 얼굴 넷 + 무표정) ──
@@ -2046,31 +742,6 @@ const FACE_OFF = [
   [1 / 3, 0],
   [2 / 3, 0.5]
 ];
-
-function drawTears(g, cx, ey, ex, alpha) {
-  for (const sx of [-1, 1]) {
-    const x0 = cx + sx * (ex + 11),
-      y0 = ey + 15;
-    g.lineCap = 'round';
-    g.lineJoin = 'round';
-    g.strokeStyle = `rgba(95, 190, 255, ${0.85 * alpha})`;
-    g.lineWidth = 11;
-    g.beginPath();
-    g.moveTo(x0, y0);
-    g.bezierCurveTo(x0 + sx * 8, y0 + 30, x0 - sx * 6, y0 + 58, x0 + sx * 6, y0 + 112);
-    g.stroke();
-    g.strokeStyle = `rgba(235, 250, 255, ${0.9 * alpha})`;
-    g.lineWidth = 3.5;
-    g.beginPath();
-    g.moveTo(x0 - sx * 2, y0 + 6);
-    g.bezierCurveTo(x0 + sx * 5, y0 + 30, x0 - sx * 8, y0 + 56, x0 + sx * 3, y0 + 100);
-    g.stroke();
-    g.fillStyle = `rgba(95, 190, 255, ${0.9 * alpha})`;
-    g.beginPath();
-    g.ellipse(x0 + sx * 7, y0 + 118, 6, 8, 0, 0, TAU);
-    g.fill();
-  }
-}
 
 function drawCrowdDeadEyes(g, cx, ey, ex) {
   const ink = '#2a1d26';
@@ -2168,12 +839,10 @@ function drawCrowdFace(g, ox, oy, st) {
       g.closePath();
       g.fill();
     }
-    drawTears(g, cx, ey, ex, st === 2 ? .65 : 1);
   }
   g.strokeStyle = ink;
   g.lineWidth = 5;
   if (st === 2) {
-    // Tight, downward-curved mouth: an angry pout under the tears.
     g.beginPath();
     g.moveTo(108, 202);
     g.lineTo(120, 207);
@@ -2606,7 +1275,7 @@ function fixTick(f, dt) {
       if (f.burst <= 0) f.ft = f.mode === 'path' ? rand(2.5, 7) : rand(0.6, 3.2);
     } else if (f.ft <= 0) {
       f.burst = rand(0.12, 0.55);
-      if (f.near && f.near < 9) sfxFlick(THREE.MathUtils.clamp(1.1 - f.near * 0.1, 0.25, 1), f.pan || 0);
+      if (f.near && f.near < 9) sfx.flick(THREE.MathUtils.clamp(1.1 - f.near * 0.1, 0.25, 1), f.pan || 0);
     }
   } else if (f.mode === 'broken') {
     I = 0;
@@ -2616,7 +1285,7 @@ function fixTick(f, dt) {
       if (f.burst <= 0) f.ft = rand(3, 9);
     } else if (f.ft <= 0) {
       f.burst = rand(0.08, 0.3);
-      if (f.near && f.near < 9) sfxFlick(THREE.MathUtils.clamp(1 - f.near * 0.1, 0.2, 0.8), f.pan || 0);
+      if (f.near && f.near < 9) sfx.flick(THREE.MathUtils.clamp(1 - f.near * 0.1, 0.2, 0.8), f.pan || 0);
     }
   } else if (f.mode === 'dying') {
     f.dieT -= dt;
@@ -2629,39 +1298,17 @@ function fixTick(f, dt) {
 
 // ── 셰이더 ──
 const LU = {
-  uLF: {
-    value: LF.tex
-  },
-  uLFRect: {
-    value: new THREE.Vector4(LF.x0, LF.z0, LF.res / LF.nx, LF.res / LF.nz)
-  },
-  uAmb: {
-    value: 0.03
-  },
-  uFlash: {
-    value: new THREE.Vector4(0, -50, 0, 0)
-  },
-  uFogColor: {
-    value: new THREE.Color(0x8a8160)
-  },
-  uFogNear: {
-    value: 3.5
-  },
-  uFogFar: {
-    value: 23
-  },
-  uFogMax: {
-    value: 0.86
-  },
-  uLightA: {
-    value: new THREE.Color(0.93, 1.0, 0.86)
-  },
-  uLightB: {
-    value: new THREE.Color(1.0, 0.96, 0.88)
-  },
-  uDirt: {
-    value: TEX.dirt
-  },
+  uLF: { value: LF.tex },
+  uLFRect: { value: new THREE.Vector4(LF.x0, LF.z0, LF.res / LF.nx, LF.res / LF.nz) },
+  uAmb: { value: 0.03 },
+  uFlash: { value: new THREE.Vector4(0, -50, 0, 0) },
+  uFogColor: { value: new THREE.Color(0x8a8160) },
+  uFogNear: { value: 3.5 },
+  uFogFar: { value: 23 },
+  uFogMax: { value: 0.86 },
+  uLightA: { value: new THREE.Color(0.93, 1.0, 0.86) },
+  uLightB: { value: new THREE.Color(1.0, 0.96, 0.88) },
+  uDirt: { value: TEX.dirt },
 };
 const LIGHT_GLSL = `
 uniform sampler2D uLF; uniform vec4 uLFRect; uniform float uAmb; uniform vec4 uFlash;
@@ -2722,27 +1369,13 @@ const WHITE_TEX = (() => {
 function envMat(o = {}) {
   const m = new THREE.ShaderMaterial({
     uniforms: Object.assign({
-      map: {
-        value: o.map || WHITE_TEX
-      },
-      uTint: {
-        value: new THREE.Color(o.color === undefined ? 0xffffff : o.color)
-      },
-      uKind: {
-        value: o.kind || 0
-      },
-      uFloorY: {
-        value: o.floorY || 0
-      },
-      uCeilY: {
-        value: o.ceilY || CEIL
-      },
-      uDirtAmt: {
-        value: o.dirt === undefined ? 0.16 : o.dirt
-      },
-      uGain: {
-        value: o.gain === undefined ? 1 : o.gain
-      },
+      map: { value: o.map || WHITE_TEX },
+      uTint: { value: new THREE.Color(o.color === undefined ? 0xffffff : o.color) },
+      uKind: { value: o.kind || 0 },
+      uFloorY: { value: o.floorY || 0 },
+      uCeilY: { value: o.ceilY || CEIL },
+      uDirtAmt: { value: o.dirt === undefined ? 0.16 : o.dirt },
+      uGain: { value: o.gain === undefined ? 1 : o.gain },
     }, LU),
     vertexShader: ENV_VS,
     fragmentShader: ENV_FS,
@@ -2884,9 +1517,8 @@ const ENTRY = {
   z0: 34.25,
   z1: 36.5
 };
-const GD_W = 0.875,
-  GD_H = 2.0; // 고시원 방문
-function regionAt(x, z) {
+const GD_W = 0.875, GD_H = 2.0; // 고시원 방문
+function regionAt(z) {
   return z < 30 ? 'back' : z < HALL.z1 ? 'hall' : 'entry';
 }
 
@@ -3518,7 +2150,7 @@ const LURK_ROOMS = {
 // ── 방 가구 (68칸 모두 같은 살림, 문 쪽에 따라 좌우만 바꿈) ──
 function buildRooms() {
   const N = GOSI.rooms.length + 2;
-  const R = rng(202);
+  const R = seeded(202);
   const woodDk = toonLit(0x6b4a33),
     woodLt = toonLit(0xc9a77c),
     white = toonLit(0xf1eee6),
@@ -4166,7 +2798,7 @@ function buildProps() {
   }
   buildDoors();
   // 복도: 방문 앞 슬리퍼·택배·쓰레기봉투, 벽의 소화기
-  const R = rng(303);
+  const R = seeded(303);
   const slippers = makeInst(slipperGeo(), toonLit(0xffffff), 80);
   const boxes = makeInst(new THREE.BoxGeometry(1, 1, 1), envMat({
     map: TEX.box,
@@ -5222,15 +3854,11 @@ function setFace(p, f) {
   CA.aFace.setXY(p.i, FACE_OFF[f][0], FACE_OFF[f][1]);
   CA.aFace.needsUpdate = true;
 }
-// kind 0 걷는 사람, 1 뛰는 사람, 2 누운 사람 (무기력해서 누운 채로 미끄러져 옴)
-const LIE_SHIRT = ['#8a8794', '#5b6b7c', '#4f5d4a', '#9c8f7a', '#3f4656', '#b8b2a6', '#6d5a72'],
-  LIE_PANTS = ['#6a6e78', '#393a42', '#4a4f5c', '#55524c'];
 
 function newPerson(x, z, opt = {}) {
   const i = allocAlive();
   if (i < 0) return null;
-  const kind = opt.kind || 0,
-    female = Math.random() < 0.5;
+  const kind = opt.kind || 0, female = Math.random() < 0.5;
   const p = {
     i,
     x,
@@ -5279,7 +3907,6 @@ function newPerson(x, z, opt = {}) {
     kbz: 0,
     dirx: 0,
     dirz: 0,
-    tearT: rand(0, 0.5),
     book: kind !== 2 && Math.random() < 0.25,
     bookCover: Math.random() < 0.5 ? 0 : 1,
     dragLv: 0,
@@ -5914,10 +4541,9 @@ function playerMove(dt, canMove) {
   PL.stepAcc += moved;
   if (PL.stepAcc > (PL.running ? 0.84 : 0.66)) {
     PL.stepAcc = 0;
-    const reg = regionAt(PL.x, PL.z),
-      loud = PL.running ? 1.3 : 1;
+    const reg = regionAt(PL.z), loud = PL.running ? 1.3 : 1;
     const fl = reg === 'back' ? floorKindAt(PL.x, PL.z) : reg === 'hall' ? 'wood' : 'tile';
-    sfxStep(fl, (fl === 'vinyl' ? 0.8 : 0.6) * loud);
+    sfx.step(fl, (fl === 'vinyl' ? 0.8 : 0.6) * loud);
   }
   PL.inHouse = PL.z > 30.05;
 }
@@ -6310,7 +4936,7 @@ function switchWeapon(to) {
   WEP.shotgun.reloadT = 0;
   WEP.switchT = 0.42;
   WEP.switchTo = to;
-  sfxSwitch();
+  sfx.switchWeapon();
 }
 
 function weaponTick(dt) {
@@ -6336,16 +4962,16 @@ function weaponTick(dt) {
     const k = 1 - ps.reloadT / ps.dur;
     if (!WEP.magSpawned && k > 0.16) {
       WEP.magSpawned = true;
-      sfxMagOut();
+      sfx.magOut();
       dropMags();
     }
     if (!WEP.magIn && k > 0.55) {
       WEP.magIn = true;
-      sfxMagIn();
+      sfx.magIn();
     }
     if (!WEP.slid && k > 0.78) {
       WEP.slid = true;
-      sfxSlide();
+      sfx.slide();
     }
     if (ps.reloadT <= 0) {
       for (let h = 0; h < 2; h++) {
@@ -6365,14 +4991,14 @@ function weaponTick(dt) {
       if (sg.mag < sg.size && sg.res > 0) {
         sg.mag++;
         sg.res--;
-        sfxShellIn();
+        sfx.shellIn();
         hudAmmo(true);
         sg.shellT = 0.42;
         VM.shot.rec = Math.max(VM.shot.rec, 0.25);
       }
       if (sg.mag >= sg.size || sg.res <= 0) {
         sg.reloadT = 0;
-        sfxPump(0.05);
+        sfx.pumpOut(0.05);
         VM.shot.pumpT = 0.4;
       }
     }
@@ -6380,7 +5006,7 @@ function weaponTick(dt) {
   if (sg.pumpQ > 0) {
     sg.pumpQ -= dt;
     if (sg.pumpQ <= 0) {
-      sfxPump();
+      sfx.pumpOut();
       VM.shot.pumpT = 0.42;
     }
   }
@@ -6574,11 +5200,7 @@ function bulletHit(dmgHead, dmgBody, dmgLegs, power, weapon, falloff = 0) {
     if (weapon === 'pistol' || weapon === 'shotgun') dmg *= GUN_MOD.damage;
     if (falloff) dmg *= THREE.MathUtils.clamp(1.35 - t / falloff, 0.3, 1);
     hurtPerson(p, dmg, HIT.part, _rd.x, _rd.z, hx, hy, hz, power, weapon);
-    return {
-      kind: 'person',
-      p,
-      part: HIT.part
-    };
+    return { kind: 'person', p, part: HIT.part };
   }
   if (RAY.hit && wallT < 60) {
     const hx = _ro.x + _rd.x * wallT,
@@ -6586,7 +5208,7 @@ function bulletHit(dmgHead, dmgBody, dmgLegs, power, weapon, falloff = 0) {
       hz = _ro.z + _rd.z * wallT;
     addDecal(hx, hy, hz, wn.x, wn.y, wn.z, rand(0.07, 0.1), 4);
     dust(hx, hy, hz, wn.x, wn.y, wn.z, surf === 'floor' ? 0xa07c2c : surf === 'ceil' ? 0xe0cf93 : 0xd6ac36);
-    if (Math.random() < 0.6) sfxWallHit(THREE.MathUtils.clamp(1.2 - wallT * 0.05, 0.3, 1), panOf(hx, hz));
+    if (Math.random() < 0.6) sfx.wallHit(THREE.MathUtils.clamp(1.2 - wallT * 0.05, 0.3, 1), panOf(hx, hz));
   }
   return null;
 }
@@ -6599,7 +5221,7 @@ function shootPistol(h) {
   arm.flash.material.rotation = rand(0, TAU);
   const fs = rand(0.085, 0.12);
   arm.flash.scale.set(fs, fs, 1);
-  if (!GUN_MOD.silencer) sfxPistol(h ? -0.25 : 0.25);
+  if (!GUN_MOD.silencer) sfx.gun(h ? -0.25 : 0.25);
   if (!GUN_MOD.noRecoil) {
     PL.kick += 0.026;
     PL.kickYaw += rand(-0.006, 0.006);
@@ -6618,7 +5240,7 @@ function shootShotgun() {
   s.rec = GUN_MOD.noRecoil ? 0 : 1;
   s.flashT = 0.07;
   s.flash.material.rotation = rand(0, TAU);
-  if (!GUN_MOD.silencer) sfxShotgun();
+  if (!GUN_MOD.silencer) sfx.shotgunOut();
   if (!GUN_MOD.noRecoil) {
     PL.kick += 0.06;
     PL.kickYaw += rand(-0.01, 0.01);
@@ -6639,7 +5261,7 @@ function stab() {
   WEP.stabCD = 0.3;
   VM.knife.visible = true;
   VM.arms[0].gun.visible = false;
-  sfxSwing(0.8);
+  sfx.swing(0.8);
   camera.getWorldDirection(_fw);
   let best = null,
     bd = 9;
@@ -6656,7 +5278,7 @@ function stab() {
   }
   if (best) later(0.07, () => {
     if (best.state !== 'cling') return;
-    sfxStab(panOf(best.x, best.z), 1);
+    sfx.stab(panOf(best.x, best.z), 1);
     const dx = best.x - PL.x,
       dz = best.z - PL.z,
       L = Math.hypot(dx, dz) || 1;
@@ -6672,7 +5294,7 @@ function melee() {
   WEP.stabCD = 0.45;
   VM.knife.visible = true;
   VM.arms[0].gun.visible = false;
-  sfxSwing(1);
+  sfx.swing(1);
   camera.getWorldDirection(_fw);
   let best = null,
     bd = 1.9;
@@ -6691,7 +5313,7 @@ function melee() {
     const dx = best.x - PL.x,
       dz = best.z - PL.z,
       L = Math.hypot(dx, dz) || 1;
-    sfxStab(panOf(best.x, best.z), 1);
+    sfx.stab(panOf(best.x, best.z), 1);
     hurtPerson(best, 55, 'body', dx / L, dz / L, best.ta.x, best.ta.y + 0.1, best.ta.z, 0.8, 'knife');
   });
 }
@@ -6860,10 +5482,6 @@ function dust(x, y, z, nx, ny, nz, color) {
   for (let k = 0; k < 6; k++) ptSpawn(1, x, y, z, nx * rand(0.6, 2) + rand(-0.6, 0.6), ny * rand(0.6, 2) + rand(-0.3, 1.2), nz * rand(0.6, 2) + rand(-0.6, 0.6), rand(0.008, 0.02), color, 0.7);
 }
 
-function tear(x, y, z) {
-  ptSpawn(2, x, y, z, rand(-0.1, 0.1), rand(-0.2, 0.1), rand(-0.1, 0.1), rand(0.016, 0.026), 0x6cc8ff, 1.5);
-}
-
 function ejectShell(side) {
   _rt.set(1, 0, 0).applyQuaternion(camera.quaternion);
   camera.getWorldDirection(_fw);
@@ -6874,7 +5492,7 @@ function ejectShell(side) {
 }
 
 function ptTick(dt) {
-  tinkBudget = Math.max(0, tinkBudget - dt * 6);
+  sfx.tinkBudget = Math.max(0, sfx.tinkBudget - dt * 5);
   for (let i = 0; i < PT_MAX; i++) {
     const d = PTS[i];
     if (!d.on) continue;
@@ -6897,7 +5515,7 @@ function ptTick(dt) {
         d.vy = Math.abs(d.vy) * 0.35;
         d.vx *= 0.5;
         d.vz *= 0.5;
-        sfxTink(0.9, panOf(d.x, d.z));
+        sfx.tink(0.9, panOf(d.x, d.z));
       } else {
         d.on = false;
         pts.setMatrixAt(i, _zeroM);
@@ -6942,9 +5560,7 @@ function flashTick(dt) {
 }
 // 소리 좌우: 내 오른쪽 방향 (cos yaw, -sin yaw) 으로 얼마나 치우쳤나
 function panOf(x, z) {
-  const dx = x - PL.x,
-    dz = z - PL.z,
-    L = Math.hypot(dx, dz) || 1;
+  const dx = x - PL.x, dz = z - PL.z, L = Math.hypot(dx, dz) || 1;
   return THREE.MathUtils.clamp((dx * Math.cos(PL.yaw) - dz * Math.sin(PL.yaw)) / L, -1, 1) * 0.85;
 }
 
@@ -7155,7 +5771,7 @@ function laterTick() {
 
 // ── 사람 움직임 ──
 function notice(p, delay) {
-  if (p.state !== 'idle' || p.noticeT >= 0) return;
+  if ((p.state !== 'idle' || p.noticeT >= 0) || GUN_MOD.silencer) return;
   p.noticeT = delay;
   p.speakCD = Math.min(p.speakCD, delay + 0.2);
 }
@@ -7164,16 +5780,15 @@ function rise(p) {
   p.state = 'rise';
   p.rise = 0;
   p.riseDur = p.idle === 0 ? 0.45 : p.idle === 3 ? 0.8 : 1.0;
-  if (p.idle === 3) sfxChair(panOf(p.x, p.z), THREE.MathUtils.clamp(1.2 - Math.hypot(p.x - PL.x, p.z - PL.z) * 0.08, 0.25, 1));
+  if (p.idle === 3) sfx.chair(panOf(p.x, p.z), THREE.MathUtils.clamp(1.2 - Math.hypot(p.x - PL.x, p.z - PL.z) * 0.08, 0.25, 1));
 }
 
 function noiseAlert(radius) {
   for (const p of live) {
     if (p.state !== 'idle') continue;
-    const k = navIdx(p.x, p.z),
-      d = k >= 0 ? NAV.dist[k] : -1;
+    const k = navIdx(p.x, p.z), d = k >= 0 ? NAV.dist[k] : -1;
     const m = d >= 0 ? d * 0.25 : Math.hypot(p.x - PL.x, p.z - PL.z) * 1.6;
-    if (m < radius && !GUN_MOD.silencer) notice(p, rand(0.15, 0.5));
+    if (m < radius) notice(p, rand(0.15, 0.5));
   }
 }
 
@@ -7195,8 +5810,8 @@ function tryCling(p) {
       p.ca = p.yaw;
       p.cr = 0.12;
       PL.clingers.push(p);
-      sfxGrab(panOf(p.x, p.z), 1.1);
-      sfxDragStop(p);
+      sfx.grab(panOf(p.x, p.z), 1.1);
+      sfx.dragStop(p);
       PL.shake = Math.max(PL.shake, 0.6);
       p.speakCD = rand(0.6, 1.6);
       if (p.vo) {
@@ -7211,7 +5826,7 @@ function tryCling(p) {
     p.kindC = kind;
     p.cr = kind === 'stand' ? 0.6 : kind === 'kneel' ? 0.72 : kind === 'side' ? 0.58 : 0.7;
     PL.clingers.push(p);
-    sfxGrab(panOf(p.x, p.z), 1);
+    sfx.grab(panOf(p.x, p.z), 1);
     PL.shake = Math.max(PL.shake, 0.5);
     p.speakCD = rand(0.3, 1.2);
     if (p.vo) {
@@ -7236,11 +5851,9 @@ function hurtPerson(p, dmg, part, dx, dz, hx, hy, hz, power, weapon) {
       wz = hz + dz * RAY.t;
     addDecal(wx, wy, wz, RAY.nx, RAY.ny, RAY.nz, rand(0.35, 0.6) * (head ? 1.3 : 1), RAY.ny > 0.5 ? (Math.random() < 0.5 ? 0 : 1) : 5);
   }
-  const pan = panOf(p.x, p.z),
-    dist = Math.hypot(p.x - PL.x, p.z - PL.z),
-    v = THREE.MathUtils.clamp(1.3 - dist * 0.07, 0.3, 1);
-  sfxFlesh(v, pan);
-  if (head) sfxHead(pan);
+  const pan = panOf(p.x, p.z), dist = Math.hypot(p.x - PL.x, p.z - PL.z), v = THREE.MathUtils.clamp(1.3 - dist * 0.07, 0.3, 1);
+  sfx.flesh(v, pan);
+  if (head) sfx.head(pan);
   if (p.state === 'idle' || p.state === 'rise') {
     p.state = 'chase';
     p.rise = 1;
@@ -7287,7 +5900,7 @@ function killPerson(p, how, dx, dz, power) {
     p.fly = 0;
     p.kbx *= 0.15;
     p.kbz *= 0.15;
-    sfxDragStop(p);
+    sfx.dragStop(p);
   }
   if (p.vo) {
     p.vo.stop(0.03);
@@ -7338,7 +5951,7 @@ function lieTick(p, dt, d, dx, dz) {
     p.losT -= dt;
     if (p.losT <= 0 && p.noticeT < 0) {
       p.losT = 0.2;
-      if (((d < 2.6 || (d < 8.5 && losClear(p.hc.x, p.hc.y + 0.1, p.hc.z, PL.x, PL.eye, PL.z))) && PL.z < 30.6) && !GUN_MOD.silencer) notice(p, rand(0.5, 1.0));
+      if ((d < 2.6 || (d < 8.5 && losClear(p.hc.x, p.hc.y + 0.1, p.hc.z, PL.x, PL.eye, PL.z))) && PL.z < 30.6) notice(p, rand(0.5, 1.0));
     }
     if (p.noticeT >= 0) {
       p.look = approach(p.look, 1, 2.5, dt);
@@ -7383,7 +5996,7 @@ function lieTick(p, dt, d, dx, dz) {
     const onBed = b && p.x > b.x0 - m && p.x < b.x1 + m && p.z > b.z0 - m && p.z < b.z1 + m;
     if (!onBed) {
       p.yOff = Math.max(0, p.yOff - dt * 3.5);
-      if (p.yOff === 0) sfxFall(THREE.MathUtils.clamp(1.1 - d * 0.08, 0.2, 0.9), panOf(p.x, p.z), p.los ? 0 : 800);
+      if (p.yOff === 0) sfx.fall(THREE.MathUtils.clamp(1.1 - d * 0.08, 0.2, 0.9), panOf(p.x, p.z), p.los ? 0 : 800);
     }
   }
   // 몸통, 머리, 발 모두 벽에 걸리게
@@ -7424,10 +6037,10 @@ function crowdTick(dt) {
       p.losT -= dt;
       if (p.losT <= 0 && p.noticeT < 0) {
         p.losT = 0.15;
-        if ((d < 2.3 && PL.z < 30.6) && !GUN_MOD.silencer) notice(p, 0.12);
+        if (d < 2.3 && PL.z < 30.6) notice(p, 0.12);
         else if (d < 13 && PL.z < 30.6 && losClear(p.hc.x, p.hc.y, p.hc.z, PL.x, PL.eye, PL.z)) {
           const facing = (Math.sin(p.yaw) * dx + Math.cos(p.yaw) * dz) / d;
-          if ((d < 6 || facing > -0.25) && !GUN_MOD.silencer) notice(p, rand(0.3, 0.75));
+          if (d < 6 || facing > -0.25) notice(p, rand(0.3, 0.75));
         }
       }
       if (p.noticeT >= 0) {
@@ -7477,7 +6090,7 @@ function crowdTick(dt) {
       p.stepAcc = (p.stepAcc || 0) + p.spd * dt;
       if (p.stepAcc > (p.kind ? 0.85 : 0.62)) {
         p.stepAcc = 0;
-        if (d < 8 && G.state === 'play') sfxCrowdStep(THREE.MathUtils.clamp(0.95 - d * 0.1, 0.14, 0.8), panOf(p.x, p.z), p.kind === 1);
+        if (d < 8 && G.state === 'play') sfx.crowdStep(THREE.MathUtils.clamp(0.95 - d * 0.1, 0.14, 0.8), panOf(p.x, p.z), p.kind === 1);
       }
       collideCircle(p, 0.25, p.y + 0.2, p.y + 1.4);
       const face = d < 3 ? Math.atan2(dx, dz) : Math.atan2(p.dirx, p.dirz);
@@ -7506,8 +6119,8 @@ function crowdTick(dt) {
       if (!p.landed && p.dieT > p.fallT) {
         p.landed = true;
         const occl = !losClear(p.x, 0.5, p.z, PL.x, PL.eye, PL.z);
-        sfxFall(THREE.MathUtils.clamp(1.2 - d * 0.08, 0.2, 1), panOf(p.x, p.z), occl ? 700 : 0);
-        if (Math.random() < 0.7) sfxSplat(0.6, panOf(p.x, p.z));
+        sfx.fall(THREE.MathUtils.clamp(1.2 - d * 0.08, 0.2, 1), panOf(p.x, p.z), occl ? 700 : 0);
+        if (Math.random() < 0.7) sfx.splat(0.6, panOf(p.x, p.z));
       }
       if (!p.pooled && p.dieT > p.fallT + 0.25) {
         p.pooled = true;
@@ -7524,7 +6137,6 @@ function crowdTick(dt) {
     }
     p.y = approach(p.y, floorAt(p.x, p.z) + (p.yOff || 0), 12, dt);
     speechTick(p, dt, d);
-    tearTick(p, dt, d);
     animatePerson(p, dt);
   }
   // 서로 겹치지 않게
@@ -7556,27 +6168,23 @@ function crowdTick(dt) {
 }
 // 누운 사람이 끌려오는 소리: 가까운 셋까지 (발목을 잡고 내게 끌려올 때도)
 function dragTick(dt) {
-  if (!ac) return;
+  if (!audio.ctx) return;
   const list = [];
   if (G.state === 'play')
     for (const p of live) {
       if (p.kind !== 2) continue;
       const sp = p.state === 'chase' ? p.spd : p.state === 'cling' ? Math.hypot(PL.vx, PL.vz) * 0.9 : 0;
       if (sp < 0.05) continue;
-      const d = Math.hypot(p.x - PL.x, p.z - PL.z);
+      const d = Math.hypot(p.x   - PL.x, p.z - PL.z);
       if (d < 15) list.push([d, p, sp]);
     }
   list.sort((a, b) => a[0] - b[0]);
-  dragAssign(list.slice(0, 3).map(([d, p, sp]) => ({
+  sfx.dragAssign(list.slice(0, 3).map(([d, p, sp]) => ({
     p,
     lv: THREE.MathUtils.clamp(0.18 + sp / 2.4, 0, 1) * Math.pow(1 - d / 15, 1.5),
     pan: panOf(p.x, p.z),
     occl: p.state === 'chase' && !p.los
   })), dt);
-}
-
-function angleTo(cur, target, k, dt) {
-  return cur + wrapAngle(target - cur) * (1 - Math.exp(-k * dt));
 }
 
 function speechTick(p, dt, d) {
@@ -7593,9 +6201,9 @@ function speechTick(p, dt, d) {
   if (lieIdle) {
     // 혼자 누워서 훌쩍이며 중얼거림 (작게, 띄엄띄엄)
     p.speakCD = rand(4.5, 8.5);
-    if (d > 11 || voicesPlaying() >= 5 || G.state !== 'play' || (p.vo && !p.vo.stopped)) return;
+    if (d > 11 || audio.isVoicePlaying() >= 5 || G.state !== 'play' || (p.vo && !p.vo.stopped)) return;
     const occ = !losClear(p.hc.x, p.hc.y + 0.1, p.hc.z, PL.x, PL.eye, PL.z);
-    const h = playVoice(p.voiceKey, {
+    const h = audio.playVoice(p.voiceKey, {
       rate: p.vrate * 0.97,
       gain: THREE.MathUtils.clamp(0.75 - d * 0.05, 0.12, 0.6) * (occ ? 0.7 : 1),
       pan: panOf(p.x, p.z),
@@ -7608,11 +6216,11 @@ function speechTick(p, dt, d) {
   }
   const cling = p.state === 'cling';
   p.speakCD = cling ? rand(2.0, 4.0) : rand(2.2, 4.8) * (d > 9 ? 1.4 : 1);
-  if (talking || d > 19 || voicesPlaying() >= 6 || G.state !== 'play') return;
+  if (talking || d > 19 || audio.isVoicePlaying() >= 6 || G.state !== 'play') return;
   const occl = !cling && !(p.state === 'chase' ? p.los : losClear(p.hc.x, p.hc.y, p.hc.z, PL.x, PL.eye, PL.z));
   const vol = (cling ? 0.62 : THREE.MathUtils.clamp(1.25 - d * 0.075, 0.2, 1)) * (occl ? 0.75 : 1);
   const key = cling ? p.voiceKey.replace(/^g_/, 'f_') : p.voiceKey;
-  const h = playVoice(VO[key] ? key : p.voiceKey, {
+  const h = audio.playVoice(audio.voices[key] ? key : p.voiceKey, {
     rate: p.vrate * (cling ? 0.96 : 1),
     gain: vol * (lie ? 0.85 : 1),
     pan: panOf(p.x, p.z),
@@ -7624,27 +6232,17 @@ function speechTick(p, dt, d) {
   if (h) p.vo = h;
 }
 
-function tearTick(p, dt, d) {
-  if (d > 9 || p.state === 'dying') return;
-  p.tearT -= dt;
-  if (p.tearT > 0) return;
-  p.tearT = rand(0.28, 0.6);
-  const e = Math.random() < 0.5 ? p.e1 : p.e2;
-  tear(e.x, e.y - 0.06, e.z);
-}
-
 // ── 처음 배치 ──
 const roomBy = (num) => LEVEL.rooms.find((r) => r.num === num);
 // 문 상태: 사람이 있는 방은 열려 있고, 몇 개는 열려 있거나 살짝 열려 있다. 끝방은 살짝.
 function initDoors() {
-  const R = rng(77);
+  const R = seeded(77);
   for (const g of LEVEL.gdoors) {
     if (!g.num) {
       g.init = 0.42;
       continue;
     }
-    const v = R(),
-      w = R();
+    const v = R(), w = R();
     if (LURK_ROOMS[g.num]) g.init = 1.32 + w * 0.1;
     else g.init = v < 0.12 ? 1.2 + w * 0.3 : v < 0.22 ? 0.16 + w * 0.3 : 0;
   }
@@ -7681,14 +6279,7 @@ function spawnLurkers() {
   lie(16.5, 19.4, 0, -1); // 현관 복도 바닥: 발을 로비 쪽으로
   lie(12.0, 1.5, -1, 0); // 끝방 가는 복도 바닥: 발을 오는 쪽으로
   // 벽을 보고 선 사람
-  for (const [x, z, yaw] of [
-    [21.6, 21.85, Math.PI],
-    [14.0, 8.65, 0],
-    [20.2, 4.6, -Math.PI / 2],
-    [6.0, 14.95, Math.PI],
-    [31.55, 18.6, Math.PI / 2],
-    [7.85, 19.3, Math.PI]
-  ]) put(x, z, {
+  for (const [x, z, yaw] of [[21.6, 21.85, Math.PI], [14.0, 8.65, 0], [20.2, 4.6, -Math.PI / 2], [6.0, 14.95, Math.PI], [31.55, 18.6, Math.PI / 2], [7.85, 19.3, Math.PI]]) put(x, z, {
     state: 'idle',
     idle: 0,
     yaw: yaw + rand(-0.15, 0.15)
@@ -7787,14 +6378,10 @@ function burstRoom(o = {}) {
   const occl = !losClear(PL.x, PL.eye, PL.z, g.cx, 1.0, g.cz);
   let p;
   if (lie) {
-    p = newPerson(mx + ix * 0.95, mz + iz * 0.95, {
-      state: 'chase',
-      kind: 2,
-      yaw: Math.atan2(-ix, -iz)
-    });
+    p = newPerson(mx + ix * 0.95, mz + iz * 0.95, { state: 'chase', kind: 2, yaw: Math.atan2(-ix, -iz) });
     if (!p) return null;
     gdoorSet(g, rand(1.3, 1.5), 1.7);
-    if (ac) sfxCreak(ac.currentTime, 1.7, THREE.MathUtils.clamp(1.15 - dist * 0.06, 0.25, 0.9), rand(150, 185));
+    if (audio.ctx) sfx.creak(audio.ctx.currentTime, 1.7, THREE.MathUtils.clamp(1.15 - dist * 0.06, 0.25, 0.9), rand(150, 185));
     p.spd = 0.4;
   } else {
     const runner = Math.random() < (G.eventT > 12 ? 0.4 : 0.28);
@@ -7806,7 +6393,7 @@ function burstRoom(o = {}) {
     });
     if (!p) return null;
     gdoorSet(g, rand(1.4, 1.55), 15);
-    sfxDoorBang(pan, THREE.MathUtils.clamp(1.3 - dist * 0.06, 0.3, 1.1), occl ? 900 : 0);
+    sfx.doorBang(pan, THREE.MathUtils.clamp(1.3 - dist * 0.06, 0.3, 1.1), occl ? 900 : 0);
     if (dist < 9) PL.shake = Math.max(PL.shake, 0.18);
   }
   p.los = false;
@@ -7817,8 +6404,7 @@ function burstRoom(o = {}) {
 
 // ── 불 ──
 let panelDirty = false;
-const _scrOff = new THREE.Color('#1d2026'),
-  _scrOn = new THREE.Color('#ffffff');
+const _scrOff = new THREE.Color('#1d2026'), _scrOn = new THREE.Color('#ffffff');
 
 function lightsTick(dt) {
   for (const f of FIX) {
@@ -7850,11 +6436,7 @@ function lightsTick(dt) {
     LEVEL.glows.instanceColor.needsUpdate = true;
     panelDirty = false;
   }
-  for (const {
-    m,
-    f
-  }
-    of LEVEL.lampMeshes) m.material.color.setScalar(THREE.MathUtils.lerp(0.55, 1.0, THREE.MathUtils.clamp(f.I, 0, 1)));
+  for (const { m, f } of LEVEL.lampMeshes) m.material.color.setScalar(THREE.MathUtils.lerp(0.55, 1.0, THREE.MathUtils.clamp(f.I, 0, 1)));
   // 끝방 알전구, 방마다 모니터
   if (LEVEL.bulbFix) {
     const k = THREE.MathUtils.clamp(LEVEL.bulbFix.I, 0, 1);
@@ -7873,9 +6455,9 @@ function lightsTick(dt) {
   if (scrDirty) LEVEL.furn.screens.m.instanceColor.needsUpdate = true;
   lfFlush();
   // 형광등 웅: 고시원 안에서는 밝은 만큼, 집 안에서는 문 너머로 먹먹하게
-  if (ac && HUM.on) {
+  if (audio.ctx && sfx.hum.on) {
     const l = PL.inHouse ? (DOORS.inner.open ? 0.55 : 0.4) : THREE.MathUtils.clamp(lfAtCPU(PL.x, PL.z) * 0.95, 0, 1);
-    humSet(l, !PL.inHouse || DOORS.inner.a > 0.4);
+    sfx.humSet(l, !PL.inHouse || DOORS.inner.a > 0.4);
   }
 }
 
@@ -7968,7 +6550,7 @@ function pickupTick() {
       a.taken = true;
       a.m.visible = false;
       WEP.pistol.res += a.n;
-      sfxAmmo();
+      sfx.itemPickup();
       showNotice(`권총 탄약 +${a.n}`);
       hudAmmo(true);
     }
@@ -7983,7 +6565,7 @@ function pickupTick() {
       gun.m.visible = false;
       gun.spark.visible = false;
       WEP.hasShotgun = true;
-      sfxGetGun();
+      sfx.getGun();
       showNotice('산탄총');
       switchWeapon('shotgun');
       $('swap').hidden = false;
@@ -8019,12 +6601,12 @@ function startEvent() {
   }
   later(0.45, () => {
     if (!G.event) return;
-    sfxBreaker();
+    sfx.breaker();
     PL.shake = Math.max(PL.shake, 0.5);
   });
   later(1.25, () => {
     if (!G.event) return;
-    humKill();
+    sfx.humKill();
     for (const f of FIX)
       if (f.after === 'path') {
         f.mode = 'path';
@@ -8036,7 +6618,7 @@ function startEvent() {
   later(2.3, () => {
     if (!G.event || G.state !== 'play') return;
     const keys = [...F_KEYS_F, ...F_KEYS_M];
-    for (let i = 0; i < 7; i++) playVoice(pick(keys), {
+    for (let i = 0; i < 7; i++) audio.playVoice(pick(keys), {
       rate: rand(0.9, 1.08),
       gain: rand(0.28, 0.5),
       pan: rand(-0.9, 0.9),
@@ -8062,7 +6644,7 @@ function startEvent() {
     });
   });
   for (const p of live)
-    if (p.state === 'idle' && !GUN_MOD.silencer) notice(p, rand(0.6, 2.2));
+    if (p.state === 'idle') notice(p, rand(0.6, 2.2));
 }
 
 function eventTick(dt) {
@@ -8081,7 +6663,7 @@ function eventTick(dt) {
   G.chorusT -= dt;
   if (G.chorusT <= 0 && G.eventT > 3) {
     G.chorusT = rand(0.8, 1.8);
-    if (voicesPlaying() < 5) playVoice(pick([...F_KEYS_F, ...F_KEYS_M]), {
+    if (audio.isVoicePlaying() < 5) audio.playVoice(pick([...F_KEYS_F, ...F_KEYS_M]), {
       rate: rand(0.9, 1.08),
       gain: rand(0.15, 0.3),
       pan: rand(-0.9, 0.9),
@@ -8104,9 +6686,9 @@ function doorsTick(dt) {
     DOORS.pool.visible = false;
     NAV.doorBlock = false;
     NAV.src = -1;
-    if (ac) {
-      sfxLatch(ac.currentTime, 0.8);
-      sfxCreak(ac.currentTime + 0.05, 1.1, 0.8, 175);
+    if (audio.ctx) {
+      sfx.latch(audio.ctx.currentTime, 0.8);
+      sfx.creak(audio.ctx.currentTime + 0.05, 1.1, 0.8, 175);
     }
   }
   doorTick(d, dt, 3.0);
@@ -8117,7 +6699,7 @@ function doorsTick(dt) {
   const gd = LEVEL.gunDoor;
   if (gd && gd.target < 1.0 && G.state === 'play' && Math.hypot(PL.x - gd.cx, PL.z - gd.cz) < 2.3) {
     gdoorSet(gd, 1.45, 1.5);
-    if (ac) sfxCreak(ac.currentTime, 2.0, 0.8, 160);
+    if (audio.ctx) sfx.creak(audio.ctx.currentTime, 2.0, 0.8, 160);
   }
 }
 
@@ -8130,7 +6712,7 @@ function pressureTick(dt) {
     G.heartT -= dt;
     if (G.heartT <= 0) {
       G.heartT = 0.8 - PL.pressure * 0.38;
-      sfxHeart(0.5 + PL.pressure * 0.6);
+      sfx.heart(0.5 + PL.pressure * 0.6);
     }
   }
   if (PL.pressure >= 1 && G.state === 'play') gameOver();
@@ -8167,11 +6749,11 @@ function overTick(dt) {
       arm.rec = 1;
       arm.flashT = 0.05;
       arm.slideT = 0.08;
-      sfxPistol(h ? -0.25 : 0.25);
+      sfx.gun(h ? -0.25 : 0.25);
     } else {
       VM.shot.rec = 1;
       VM.shot.flashT = 0.06;
-      sfxShotgun();
+      sfx.shotgunOut();
     }
     muzzleLight(1.4);
     const dx = p.x - PL.x,
@@ -8179,7 +6761,7 @@ function overTick(dt) {
       L = Math.hypot(dx, dz) || 1;
     bloodBurst(p.hc.x, p.hc.y, p.hc.z, dx / L, dz / L, 14, 1.2);
     killPerson(p, 'head', dx / L, dz / L, 1.2);
-    sfxHead(panOf(p.x, p.z));
+    sfx.head(panOf(p.x, p.z));
   }
   PL.clingers.length = 0;
   PL.pressure = Math.max(0, PL.pressure - dt * 1.5);
@@ -8190,10 +6772,7 @@ function overTick(dt) {
     say.classList.remove('go');
     void say.offsetWidth;
     say.classList.add('go');
-    playVoice('p_no', {
-      gain: 1.0,
-      verb: 0.2
-    });
+    audio.playVoice('p_no', { gain: 1.0, verb: 0.2 });
   }
   if (G.overT > G.sweepEnd + 1.7 && !G.ending) {
     G.ending = true;
@@ -8208,12 +6787,12 @@ function exitTick(dt) {
       G.exitT = 0;
       DOORS.front.target = 1.6;
       DOORS.front.wall.off = true;
-      sfxOut();
+      sfx.exitToWhite();
       INPUT.fire = false;
     } else if (G.t > G.rattleT) {
       // 총을 찾기 전에는 현관문이 안 열린다
       G.rattleT = G.t + 1.3;
-      sfxRattle();
+      sfx.rattle();
       DOORS.front.a = 0.03;
     }
   }
@@ -8229,15 +6808,10 @@ function exitTick(dt) {
 function goOutside() {
   G.state = 'leaving';
   const shells = WEP.hasShotgun ? WEP.shotgun.mag + WEP.shotgun.res : 0;
-  const hash = Link.write({
-    dir: 'out',
-    kills: LINK_KILLS + G.kills,
-    shells,
-    main: LINK.main || {}
-  });
-  stopAllVoices();
-  humStop();
-  sfxDragAllStop();
+  const hash = Link.write({ dir: 'out', kills: LINK_KILLS + G.kills, shells, main: LINK.main || {} });
+  audio.stopAllVoices();
+  sfx.humStop();
+  sfx.dragAllStop();
   if (document.pointerLockElement) document.exitPointerLock();
   location.replace('./' + location.search + hash);
 }
@@ -8286,7 +6860,7 @@ function hitMarker(kill) {
   els.hitm.classList.remove('go');
   void els.hitm.offsetWidth;
   els.hitm.classList.add('go');
-  sfxHitTick(kill);
+  sfx.hitTick(kill);
 }
 let noticeTok = 0;
 
@@ -8565,8 +7139,8 @@ function fadeFrom(dur) {
 function showResult() {
   G.state = 'result';
   if (document.pointerLockElement) document.exitPointerLock();
-  stopAllVoices();
-  humStop();
+  audio.stopAllVoices();
+  sfx.humStop();
   $('say').hidden = true;
   for (const id of ['xhair', 'obj', 'ammo', 'prompt', 'touchUI', 'pauseBtn', 'hudK']) $(id).hidden = true;
   $('endN').textContent = LINK_KILLS + G.kills;
@@ -8746,11 +7320,11 @@ function doorStart(fromGate) {
     els.fade.style.opacity = 1;
     fadeFrom(0.5);
   }
-  if (ac) {
-    const t = ac.currentTime - DS.t;
-    sfxLock(t + 0.55);
-    sfxLatch(t + 1.45, 1);
-    sfxCreak(t + 1.65, 2.5, 1, 140);
+  if (audio.ctx) {
+    const t = audio.ctx.currentTime - DS.t;
+    sfx.lock(t + 0.55);
+    sfx.latch(t + 1.45, 1);
+    sfx.creak(t + 1.65, 2.5, 1, 140);
   }
 }
 // ── 밖에서 들어왔을 때: 현관 앞에서 한 번 누르면 도어락을 열고 들어간다 (휴대폰 소리·PC 마우스 잠금을 여기서 켬) ──
@@ -8819,12 +7393,12 @@ function enterHouse() {
   for (const id of ['xhair', 'ammo', 'pauseBtn', 'hudK']) $(id).hidden = false;
   if (IS_TOUCH) $('touchUI').hidden = false;
   hudAmmo(false);
-  humStart();
+  sfx.humStart();
 }
 
 // ── 시작 / 다시 ──
 function resetWorld() {
-  stopAllVoices();
+  audio.stopAllVoices();
   threatReset();
   LATER.length = 0;
   noticeTok++;
@@ -8854,7 +7428,7 @@ function resetWorld() {
   NAV.doorBlock = true;
   NAV.src = -1;
   initDoors();
-  sfxDragAllStop();
+  sfx.dragAllStop();
   resetLights();
   playerReset();
   weaponsReset();
@@ -8939,9 +7513,7 @@ function requestLock() {
   try {
     const p = canvas.requestPointerLock();
     if (p && p.catch) p.catch(lockFailed);
-  } catch {
-    lockFailed();
-  }
+  } catch { lockFailed(); }
 }
 
 function pauseHint() {
@@ -8967,9 +7539,9 @@ function setPaused(on) {
   pauseHint();
   if (on && document.pointerLockElement) document.exitPointerLock();
   if (!on) wantResume = false;
-  if (ac) {
-    if (on) ac.suspend();
-    else ac.resume();
+  if (audio.ctx) {
+    if (on) audio.ctx.suspend();
+    else audio.ctx.resume();
   }
 }
 // 계속하기: PC는 마우스가 잠긴 뒤에 풀어 준다 (잠기기 전에 풀리면 시점이 안 돌아서 헷갈림)
@@ -9047,9 +7619,7 @@ window.addEventListener('mouseup', (e) => {
 });
 window.addEventListener('wheel', (e) => {
   if (G.state === 'play' && !PAUSED && Math.abs(e.deltaY) > 4) switchWeapon();
-}, {
-  passive: true
-});
+}, { passive: true });
 window.addEventListener('contextmenu', (e) => e.preventDefault());
 
 const KEYS = new Set();
@@ -9090,12 +7660,13 @@ const modRecoil = $('modRecoil');
 const modAuto = $('modAuto');
 const modNoclip = $('modNoclip');
 const silencer = $('silencer');
+const modMenuBtn = $('modmenubtn');
 
+modMenuBtn.addEventListener('click', () => setModMenu(modMenu.hidden));
+modMenuBtn.style.display = IS_TOUCH ? 'block' : 'none';
 function setModMenu(open) {
   modMenu.hidden = !open;
-  if (open) damageRange.focus({
-    preventScroll: true
-  });
+  if (open) damageRange.focus({ preventScroll: true });
 }
 
 function syncModValues() {
@@ -9122,8 +7693,7 @@ $('modRepel').addEventListener('click', () => {
   crowdRepelT = 5;
 });
 $('killAll').addEventListener('click', () => {
-  for (const p of [...live])
-    if (p.state !== 'dying' && p.state !== 'dead') killPerson(p, 'shot', 0, 1, 0);
+  for (const p of [...live]) killPerson(p, 'shot', 0, 1, 0);
 });
 syncModValues();
 
@@ -9232,9 +7802,7 @@ canvas.addEventListener('pointerdown', (e) => {
     TT.lx = e.clientX;
     TT.ly = e.clientY;
   } else return;
-  try {
-    canvas.setPointerCapture(e.pointerId);
-  } catch { }
+  try { canvas.setPointerCapture(e.pointerId); } catch { }
   e.preventDefault();
 });
 canvas.addEventListener('pointermove', (e) => {
@@ -9333,7 +7901,6 @@ for (const [id, fn] of [['reload', () => startReload()], ['swap', () => switchWe
   el.addEventListener('pointercancel', up);
   el.addEventListener('pointerleave', up);
 }
-$('modmenubtn').addEventListener('click', () => setModMenu(modMenu.hidden));
 $('mute').addEventListener('click', () => setMuted(!MUTED));
 $('mute').classList.toggle('muted', MUTED);
 $('start').addEventListener('click', () => {
@@ -9366,7 +7933,7 @@ window.addEventListener('resize', () => {
 function skipDoor() {
   if (G.state !== 'door' || DS.t > 4.0) return;
   DS.t = 4.1;
-  if (ac) stopAllVoices();
+  if (audio.ctx) audio.stopAllVoices();
 }
 canvas.addEventListener('click', () => {
   if (G.state === 'door' && performance.now() - lastTouchT > 900) skipDoor();
@@ -9390,7 +7957,7 @@ function tick(dt) {
     G.sensorT -= dt;
     if (G.sensorT <= 0) {
       LEVEL.entryLamp.mode = 'on';
-      if (ac) sfxSensor(ac.currentTime);
+      if (audio.ctx) sfx.sensor(audio.ctx.currentTime);
     }
   }
   if (G.state === 'play') {

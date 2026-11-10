@@ -2,6 +2,9 @@ export const BLANKET = ['#d8665e', '#6f8fc9', '#e8c45a', '#7fb07a', '#c78bc6', '
 export const BOOKS = ['#c0443c', '#3a6aa8', '#e2b23c', '#4f8a4a', '#8a5aa8'];
 export const CLOTH = ['#3b4252', '#6e6e72', '#c9a24a', '#2f5d8a', '#d9d4c7', '#556b2f'];
 
+export const LIE_SHIRT = ['#8a8794', '#5b6b7c', '#4f5d4a', '#9c8f7a', '#3f4656', '#b8b2a6', '#6d5a72'];
+export const LIE_PANTS = ['#6a6e78', '#393a42', '#4a4f5c', '#55524c'];
+
 export const GOSI = {
   "G": 8,
   "NX": 264,

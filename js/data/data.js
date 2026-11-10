@@ -1,3 +1,5 @@
+import { Vector2 } from 'three';
+
 export const CROWD_COLORS = {
   shirt: ['#e0474f', '#f08a2c', '#efbd24', '#4fae4c', '#25a39d', '#3a7cd6', '#7a58d0', '#d1559c', '#8a8794', '#34456a', '#9c5530', '#2f2d3a', '#c95b2e', '#5b8f3a'],
   pants: ['#2c3a5c', '#393a42', '#6a6e78', '#7a6a50', '#232630', '#4a5c7c'],
@@ -11,6 +13,11 @@ export const introText = [
   '정신건강한 사람이 희귀해진 근미래',
   '국가는 이들을 특별관리 보호대상으로 지정하고 등급을 매기기 시작했다.',
 ];
+
+export const OUTLINE = {
+  px: { value: 2.6 },
+  res: { value: new Vector2(1, 1) }
+};
 
 export const ITEM_DEFS = [{
   key: 'pierce',

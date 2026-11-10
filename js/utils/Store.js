@@ -7,9 +7,7 @@ function resolveStorage() {
     s.setItem(probe, "1");
     s.removeItem(probe);
     return s;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 export default class Store {

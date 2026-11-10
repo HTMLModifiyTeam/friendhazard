@@ -1,7 +1,7 @@
 // Game runtime extracted from the original page.
 import * as THREE from 'three';
 import VOICE_DATA from './data/voices.js';
-import { CROWD_COLORS, introText, ITEM_DEFS, WAVES, SLOTS, ALLY_DEFS, ALLY_LOOK } from './data/data.js';
+import { CROWD_COLORS, introText, ITEM_DEFS, WAVES, SLOTS, ALLY_DEFS, ALLY_LOOK, OUTLINE } from './data/data.js';
 import { RIFF, ROOTS, BASS_PAT, ARP } from './data/music.js';
 import { $, rand, pick, TAU, approach, wrapAngle, angleApproach, seeded } from './utils.js';
 import { easeOutCubic, easeInOutCubic, easeInQuad, easeInOutSine } from './eases.js'
@@ -9,6 +9,7 @@ import Linker from './utils/Linker.js';
 import Store from './utils/Store.js';
 import AudioEngine from './audio/AudioEngine.js';
 import Sfx from './audio/sfx.js';
+import Music from './audio/Music.js'
 
 // ───────────────────────── 기본 도구 ─────────────────────────
 const store = new Store("friendhazard");
@@ -77,12 +78,6 @@ sun.shadow.normalBias = 0.03;
 scene.add(sun, sun.target);
 const SUN_OFF = new THREE.Vector3(-6, 15, 10);
 
-// 윤곽선: 화면 픽셀 단위로 일정한 두께
-const OUTLINE = {
-  px: { value: 2.6 },
-  res: { value: new THREE.Vector2(1, 1) }
-};
-
 let VW = 1, VH = 1;
 const _bufSize = new THREE.Vector2();
 
@@ -103,16 +98,14 @@ onResize();
 // ───────────────────────── 소리 ─────────────────────────
 let MUTED = !!store.get('muted', false);
 
-const audio = new AudioEngine({
-  muted: MUTED,
-  voiceData: () => VOICE_DATA,
-  onReady: () => renderMusicBuffer(),
-  onRebuild: (a) => {
-    if (MU.on) musicStart(a.time + 0.05, musicNowStep());
-  },
-});
+const audio = new AudioEngine({ MUTED, voiceData: () => VOICE_DATA });
+const music = new Music({ audio, score: { roots: ROOTS, bassPat: BASS_PAT, riff: RIFF, arp: ARP }});
+audio.hooks.onReady = () => music.prerender();
+audio.hooks.onRebuild = (a) => {
+  if (music.on) music.start(a.time + .05, music.nowStep())
+};
 audio.autoUnlock();
-const sfx = new Sfx({ audio, engine: AudioEngine, rand, isMuted: () => MUTED });
+const sfx = new Sfx({ audio, isMuted: () => MUTED });
 
 function setMuted(m) {
   MUTED = m;
@@ -120,804 +113,6 @@ function setMuted(m) {
   $('mute').classList.toggle('muted', m);
   $('mute').setAttribute('aria-label', m ? '소리 켜기' : '소리 끄기');
   audio.setMuted(m);
-}
-
-const A = {};
-const ok = () => audio.ctx && (audio.ctx.state === 'running');
-
-// ── 목소리 ──
-function voicesPlaying() {
-  let n = 0;
-  for (const h of audio.activeVoices)
-    if (!h.stopped) n++;
-  return n;
-}
-
-function stopAllVoices() {
-  for (const h of audio.activeVoices) h.stop(0.05);
-  audio.activeVoices.clear();
-}
-
-// ───────────────────────── 음악 (90년대 격투게임 레이브, 140BPM) ─────────────────────────
-// 후버 스탭(뿡빵) + 오케스트라 히트 + 군중 함성 + 구르는 베이스 + 기관총 아르페지오. D 프리지안.
-const BPM = 140, SPB = 60 / BPM, S16 = SPB / 4;
-const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
-const CURVE_HARD = AudioEngine.makeCurve(3.2),
-  CURVE_SOFT = AudioEngine.makeCurve(1.6);
-const MU = {
-  on: false,
-  bus: null,
-  duck: null,
-  delay: null,
-  verb: null,
-  hall: null,
-  next: 0,
-  step: 0,
-  timer: 0,
-  src: null,
-  t0: 0,
-  from: 32
-};
-
-// 음악 버스: 덕킹(킥마다 눌림) → 버스, 짧은 잔향 + 큰 홀 + 점8분 딜레이
-function musicBusBuild(dest) {
-  const bus = audio.gain(1);
-  bus.connect(dest);
-  const duck = audio.gain(1);
-  duck.connect(bus);
-  const verb = audio.ctx.createConvolver();
-  verb.buffer = audio.makeIR(0.8, 4.2);
-  const mv = audio.gain(0.16);
-  verb.connect(mv);
-  mv.connect(bus);
-  const hall = audio.ctx.createConvolver();
-  hall.buffer = audio.makeIR(1.9, 2.8);
-  const hv = audio.gain(0.3);
-  hall.connect(hv);
-  hv.connect(bus);
-  const delay = audio.ctx.createDelay(1);
-  delay.delayTime.value = S16 * 3;
-  const fb = audio.gain(0.25),
-    wet = audio.gain(0.16),
-    lp = audio.filter('lowpass', 2800, 0.5);
-  delay.connect(lp);
-  lp.connect(fb);
-  fb.connect(delay);
-  lp.connect(wet);
-  wet.connect(bus);
-  return {
-    bus,
-    duck,
-    verb,
-    hall,
-    delay
-  };
-}
-
-// 음악은 시작할 때 한 번 미리 녹음해 두고 그걸 돌려 튼다 (실시간으로 음표마다 소리 부품을 만들면 휴대폰이 버거움).
-// 녹음이 끝나기 전에 게임이 시작되면 그때만 실시간으로 연주하다가, 녹음이 끝나면 다음 16분음표에서 녹음본으로 갈아탄다.
-// 녹음 범위: 2마디부터 42마디 분량(40마디 한 바퀴 + 2마디). 4마디~44마디를 반복하면 반복 이음매의 잔향까지 그대로 이어진다.
-const LOOP_BARS = 40,
-  MUSIC_BARS = LOOP_BARS + 2,
-  MUSIC_LOOP0 = 2 * 16 * S16,
-  MUSIC_LOOP1 = MUSIC_BARS * 16 * S16;
-let MUSIC_BUF = null,
-  musicRendering = false;
-
-function renderMusicBuffer() {
-  if (MUSIC_BUF || musicRendering || !audio.ctx) return;
-  const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-  if (!OAC) return;
-  const sr = 32000,
-    dur = MUSIC_BARS * 16 * S16,
-    len = Math.ceil(sr * dur);
-  let off;
-  try {
-    off = new OAC(2, len, sr);
-  } catch { return; }
-  if (!off.suspend) return;
-  musicRendering = true;
-  // 녹음용 부품을 따로 만들어 두고, 음표를 짤 때만 잠깐 바꿔 끼운다
-  const R = {
-    A: {},
-    MU: {}
-  };
-  let save = null;
-  const swapIn = () => {
-    let ac = audio.ctx;
-    save = {
-      ac,
-      A: Object.assign({}, A),
-      MU: Object.assign({}, MU)
-    };
-    ac = off;
-    Object.assign(A, R.A);
-    Object.assign(MU, R.MU);
-  };
-  const swapOut = () => {
-    audio.ctx = save.ac;
-    Object.assign(A, save.A);
-    Object.assign(MU, save.MU);
-    save = null;
-  };
-  try {
-    swapIn();
-    R.A.music = audio.gain(1);
-    R.A.music.connect(off.destination); // 음악 버스(0.4)는 나중에 실시간에서 곱한다
-    Object.assign(R.MU, musicBusBuild(R.A.music));
-    swapOut();
-  } catch {
-    if (save) swapOut();
-    musicRendering = false;
-    return;
-  }
-  // 실시간처럼 1초씩 앞만 짜 넣으며 녹음 (한꺼번에 다 만들면 녹음이 아주 느려짐)
-  const total = MUSIC_BARS * 16;
-  let step = 0;
-  const schedUntil = (tEnd) => {
-    swapIn();
-    try {
-      while (step < total && step * S16 < tEnd) {
-        musicStep(32 + step, step * S16);
-        step++;
-      }
-    } finally { swapOut(); }
-  };
-  schedUntil(1.2);
-  for (let t = 1; t < dur - 0.05; t += 1) {
-    off.suspend(t).then(() => {
-      schedUntil(t + 1.2);
-      off.resume();
-    });
-  }
-  const done = (buf) => {
-    if (buf && buf.duration > 0) {
-      MUSIC_BUF = buf;
-      musicHandoff();
-    }
-    musicRendering = false;
-  };
-  const p = off.startRendering();
-  if (p && p.then) p.then(done, () => musicRendering = false);
-  else off.oncomplete = (e) => done(e.renderedBuffer);
-}
-
-function musicBufSource(fromStep, t0) {
-  const src = audio.ctx.createBufferSource();
-  src.buffer = MUSIC_BUF;
-  src.loop = true;
-  src.loopStart = MUSIC_LOOP0;
-  src.loopEnd = MUSIC_LOOP1;
-  let off = (fromStep - 32) * S16;
-  if (off >= MUSIC_LOOP1) off = MUSIC_LOOP0 + (off - MUSIC_LOOP0) % (MUSIC_LOOP1 - MUSIC_LOOP0);
-  src.connect(MU.bus);
-  src.start(t0, off);
-  MU.src = src;
-  MU.on = true;
-  MU.t0 = t0;
-  MU.from = fromStep;
-}
-
-function musicStart(t0, fromStep = 0) {
-  if (!ok()) return;
-  musicStop(true);
-  if (MUSIC_BUF && fromStep >= 32) {
-    MU.bus = audio.gain(1);
-    MU.bus.connect(audio.nodes.music);
-    musicBufSource(fromStep, t0);
-    return;
-  }
-  Object.assign(MU, musicBusBuild(audio.nodes.music));
-  MU.on = true;
-  MU.step = fromStep;
-  MU.next = t0;
-  MU.src = null;
-  clearInterval(MU.timer);
-  MU.timer = setInterval(musicTick, 25);
-  musicTick();
-}
-// 실시간 연주 중에 녹음이 끝나면: 아직 안 짠 다음 16분음표부터 녹음본이 이어받는다
-function musicHandoff() {
-  if (!MU.on || MU.src || !MU.bus || !audio.ctx || !MUSIC_BUF) return;
-  let st = MU.step,
-    t = MU.next;
-  if (st < 32) return;
-  if (t < audio.ctx.currentTime + 0.01) {
-    const skip = Math.ceil((audio.ctx.currentTime + 0.01 - t) / S16);
-    st += skip;
-    t += skip * S16;
-  }
-  clearInterval(MU.timer);
-  const old = MU.bus;
-  old.gain.setValueAtTime(1, t);
-  old.gain.linearRampToValueAtTime(0, t + 0.02);
-  setTimeout(() => {
-    try {
-      old.disconnect();
-    } catch { }
-  }, 3000);
-  MU.bus = audio.gain(1);
-  MU.bus.connect(audio.nodes.music);
-  musicBufSource(st, t);
-}
-
-function musicStop(hard) {
-  if (!MU.bus) return;
-  MU.on = false;
-  clearInterval(MU.timer);
-  if (!audio.ctx) return;
-  const t = audio.ctx.currentTime,
-    b = MU.bus,
-    src = MU.src;
-  b.gain.cancelScheduledValues(t);
-  b.gain.setValueAtTime(b.gain.value, t);
-  b.gain.linearRampToValueAtTime(0, t + (hard ? 0.025 : 0.7));
-  if (src) {
-    try {
-      src.stop(t + (hard ? 0.05 : 0.75));
-    } catch { }
-  }
-  MU.bus = null;
-  MU.src = null;
-  setTimeout(() => {
-    try {
-      b.disconnect();
-    } catch { }
-  }, 2000);
-}
-// 지금 몇 번째 16분음표인지 (다시 짤 때 이어서 틀기용)
-function musicNowStep() {
-  return MU.src ? MU.from + Math.max(0, Math.floor((audio.ctx.currentTime - MU.t0) / S16)) : MU.step;
-}
-
-function musicTick() {
-  if (!MU.on || !audio.ctx || MU.src) return;
-  if (MU.next < audio.ctx.currentTime - 0.03) {
-    const skip = Math.ceil((audio.ctx.currentTime - MU.next) / S16);
-    MU.step += skip;
-    MU.next += skip * S16;
-  }
-  while (MU.next < audio.ctx.currentTime + 0.14) {
-    musicStep(MU.step, MU.next);
-    MU.step++;
-    MU.next += S16;
-  }
-}
-
-// ── 악기 ──
-function mKick(t, v = 1) {
-  // 909풍: 높은 데서 훅 떨어지는 몸통을 찌그러뜨려 '퍽' + 짧은 클릭
-  const o = audio.osc('sine', 200), g = audio.gain(0);
-  o.frequency.setValueAtTime(210, t);
-  o.frequency.exponentialRampToValueAtTime(56, t + 0.045);
-  o.frequency.exponentialRampToValueAtTime(42, t + 0.26);
-  AudioEngine.envAD(g.gain, t, 0.001, 1.1 * v, 0.33);
-  const sh = audio.ctx.createWaveShaper();
-  sh.curve = CURVE_HARD;
-  sh.oversample = '2x';
-  const post = audio.gain(0.85);
-  o.connect(g).connect(sh).connect(post).connect(MU.bus);
-  o.start(t);
-  o.stop(t + 0.36);
-  const n = audio.noiseSource(),
-    hp = audio.filter('highpass', 2600, 0.8),
-    gn = audio.gain(0);
-  AudioEngine.envAD(gn.gain, t, 0.0005, 0.32 * v, 0.016);
-  n.connect(hp).connect(gn).connect(MU.bus);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.03);
-  MU.duck.gain.setValueAtTime(0.3, t);
-  MU.duck.gain.linearRampToValueAtTime(1, t + 0.13);
-}
-
-function mSnare(t, v = 1) {
-  // 909풍 스네어: 몸통 음 두 개 + 쏴 하는 노이즈(클랩처럼 세 번 튐) + 80년대식 게이트 잔향
-  for (const [f0, f1, a, d] of [[185, 150, 0.5, 0.12], [330, 280, 0.25, 0.08]]) {
-    const o = audio.osc('triangle', f0), g = audio.gain(0);
-    o.frequency.setValueAtTime(f0, t);
-    o.frequency.exponentialRampToValueAtTime(f1, t + 0.06);
-    AudioEngine.envAD(g.gain, t, 0.001, a * v, d);
-    o.connect(g).connect(MU.bus);
-    o.start(t);
-    o.stop(t + d + 0.02);
-  }
-  const n = audio.noiseSource(), hp = audio.filter('highpass', 1400, 0.7), lp = audio.filter('lowpass', 9000, 0.7), g = audio.gain(0);
-  g.gain.setValueAtTime(0.0001, t);
-  [0, 0.009, 0.019].forEach((d) => {
-    g.gain.setValueAtTime(0.5 * v, t + d);
-    g.gain.exponentialRampToValueAtTime(0.1 * v, t + d + 0.007);
-  });
-  g.gain.setValueAtTime(0.42 * v, t + 0.028);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
-  n.connect(hp).connect(lp).connect(g).connect(MU.bus);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.22);
-  const n2 = audio.noiseSource(),
-    bp = audio.filter('bandpass', 2200, 0.6),
-    g2 = audio.gain(0);
-  g2.gain.setValueAtTime(0.0001, t);
-  g2.gain.linearRampToValueAtTime(0.16 * v, t + 0.03);
-  g2.gain.setValueAtTime(0.16 * v, t + 0.13);
-  g2.gain.linearRampToValueAtTime(0, t + 0.15);
-  n2.connect(bp).connect(g2).connect(MU.bus);
-  n2.start(t, rand(0, 2));
-  n2.stop(t + 0.17);
-  const rv = audio.gain(0.3);
-  g.connect(rv);
-  rv.connect(MU.verb);
-}
-
-function mHat(t, v, open) {
-  const n = audio.noiseSource(),
-    hp = audio.filter('highpass', open ? 6000 : 7500, 0.7),
-    pk = audio.filter('peaking', 10000, 1.2),
-    g = audio.gain(0);
-  pk.gain.value = 6;
-  AudioEngine.envAD(g.gain, t, 0.0006, (open ? 0.2 : 0.14) * v, open ? 0.2 : 0.03);
-  n.connect(hp).connect(pk).connect(g).connect(MU.bus);
-  n.start(t, rand(0, 2));
-  n.stop(t + (open ? 0.26 : 0.05));
-}
-
-function mBass(t, m, dur, acc) {
-  // 톱니+사각+사인 서브, 공진 큰 필터를 악센트마다 열고 찌그러뜨린다
-  const f = mtof(m),
-    o1 = audio.osc('sawtooth', f),
-    o2 = audio.osc('square', f),
-    sub = audio.osc('sine', f);
-  o1.detune.value = -6;
-  o2.detune.value = 6;
-  const lp = audio.filter('lowpass', 800, 5);
-  lp.frequency.setValueAtTime(420 + 2200 * acc, t);
-  lp.frequency.exponentialRampToValueAtTime(170, t + dur);
-  const sh = audio.ctx.createWaveShaper();
-  sh.curve = A.shaper;
-  const g = audio.gain(0);
-  AudioEngine.envAD(g.gain, t, 0.002, 0.3 * (0.85 + acc * 0.3), dur);
-  const g2 = audio.gain(0.35),
-    gs = audio.gain(0);
-  AudioEngine.envAD(gs.gain, t, 0.002, 0.22, dur);
-  o1.connect(lp);
-  o2.connect(g2).connect(lp);
-  lp.connect(sh).connect(g).connect(MU.duck);
-  sub.connect(gs).connect(MU.duck);
-  for (const o of [o1, o2, sub]) {
-    o.start(t);
-    o.stop(t + dur + 0.02);
-  }
-}
-// 후버(알파주노 '뿡'): 넓게 디튠한 톱니 여러 겹 + 아래 옥타브 사각 + 위 옥타브 톱니, 처음에 위에서 아래로 훅 떨어지는 음정
-function mHoover(t, m, steps, v = 1, thin = false) {
-  const dur = Math.max(0.06, steps * S16 - 0.015),
-    f = mtof(m);
-  const lp = audio.filter('lowpass', 2600, 1.4);
-  lp.frequency.setValueAtTime(4500, t);
-  lp.frequency.exponentialRampToValueAtTime(2200, t + Math.max(0.08, dur));
-  const sh = audio.ctx.createWaveShaper();
-  sh.curve = CURVE_SOFT;
-  const g = audio.gain(0);
-  g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(0.34 * v, t + 0.006);
-  g.gain.setValueAtTime(0.34 * v, t + dur - 0.02);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.03);
-  const layers = thin ? [
-    [1, -18, 1, 'sawtooth'],
-    [1, 18, 1, 'sawtooth']
-  ] : [
-    [1, -22, 1, 'sawtooth'],
-    [1, 0, 1, 'sawtooth'],
-    [1, 22, 1, 'sawtooth'],
-    [0.5, 0, 0.55, 'square'],
-    [2, 6, 0.3, 'sawtooth']
-  ];
-  let lfoTarget = null;
-  for (const [mul, det, a, type] of layers) {
-    const osc = audio.osc(type, f * mul),
-      ga = audio.gain(a * 0.3);
-    osc.detune.value = det;
-    osc.frequency.setValueAtTime(f * mul * 1.6, t);
-    osc.frequency.exponentialRampToValueAtTime(f * mul, t + (steps >= 3 ? 0.11 : 0.065));
-    osc.connect(ga).connect(lp);
-    osc.start(t);
-    osc.stop(t + dur + 0.06);
-    if (det === 0 && mul === 1) lfoTarget = osc;
-  }
-  if (lfoTarget) {
-    const lfo = audio.osc('sine', 5.5),
-      lg = audio.gain(14);
-    lfo.connect(lg);
-    lg.connect(lfoTarget.detune);
-    lfo.start(t);
-    lfo.stop(t + dur + 0.06);
-  }
-  lp.connect(sh).connect(g).connect(MU.duck);
-  const rv = audio.gain(0.28);
-  g.connect(rv);
-  rv.connect(MU.verb);
-  const ds = audio.gain(0.14);
-  g.connect(ds);
-  ds.connect(MU.delay);
-}
-// 후버 파워코드 (근음 + 5도)
-function mStab(t, m, steps, v = 1) {
-  mHoover(t, m, steps, v);
-  mHoover(t, m + 7, steps, v * 0.55, true);
-}
-// 오케스트라 히트: 단3화음을 옥타브로 쌓은 금관 + 팀파니 쿵 + 스냅, 큰 홀 잔향
-function mOrch(t, root, v = 1) {
-  const lp = audio.filter('lowpass', 5000, 0.9);
-  lp.frequency.setValueAtTime(6000, t);
-  lp.frequency.exponentialRampToValueAtTime(1300, t + 0.35);
-  const g = audio.gain(0);
-  g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(0.09 * v, t + 0.004);
-  g.gain.exponentialRampToValueAtTime(0.045 * v, t + 0.12);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
-  for (const iv of [0, 12, 19, 24, 27, 31, 36]) {
-    const f = mtof(root + iv);
-    for (const [type, a] of [['sawtooth', 1], ['square', 0.35]]) {
-      const o = audio.osc(type, f),
-        ga = audio.gain(a);
-      o.detune.value = rand(-8, 8);
-      o.frequency.setValueAtTime(f * 1.02, t);
-      o.frequency.exponentialRampToValueAtTime(f, t + 0.05);
-      o.connect(ga).connect(lp);
-      o.start(t);
-      o.stop(t + 0.55);
-    }
-  }
-  const sh = audio.ctx.createWaveShaper();
-  sh.curve = CURVE_SOFT;
-  lp.connect(sh).connect(g).connect(MU.bus);
-  const o = audio.osc('sine', 110),
-    og = audio.gain(0);
-  o.frequency.setValueAtTime(120, t);
-  o.frequency.exponentialRampToValueAtTime(52, t + 0.2);
-  AudioEngine.envAD(og.gain, t, 0.002, 0.6 * v, 0.3);
-  o.connect(og).connect(MU.bus);
-  o.start(t);
-  o.stop(t + 0.35);
-  const n = audio.noiseSource(),
-    bp = audio.filter('bandpass', 1800, 1),
-    ng = audio.gain(0);
-  AudioEngine.envAD(ng.gain, t, 0.001, 0.4 * v, 0.04);
-  n.connect(bp).connect(ng).connect(MU.bus);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.06);
-  const rv = audio.gain(0.9);
-  g.connect(rv);
-  rv.connect(MU.hall);
-  const rv2 = audio.gain(0.5);
-  og.connect(rv2);
-  rv2.connect(MU.hall);
-}
-// 군중 함성: 톱니 다섯 겹(남자 다섯 명 음높이)을 모음 공명 필터로 — kind 0: "헤이!", 1: "허!"
-function mShout(t, v = 1, kind = 0) {
-  const F = kind ? [
-    [640, 8, 1],
-    [1150, 9, 0.5],
-    [2500, 10, 0.25]
-  ] : [
-    [600, 7, 1],
-    [1900, 9, 0.55],
-    [2600, 10, 0.3]
-  ];
-  const mix = audio.gain(0.22),
-    pre = audio.gain(1);
-  [118, 136, 152, 171, 196].forEach((b) => {
-    const f0 = b * rand(0.97, 1.03),
-      o = audio.osc('sawtooth', f0);
-    o.frequency.setValueAtTime(f0 * 1.28, t);
-    o.frequency.exponentialRampToValueAtTime(f0, t + 0.07);
-    o.frequency.exponentialRampToValueAtTime(f0 * 0.8, t + 0.28);
-    o.connect(pre);
-    o.start(t);
-    o.stop(t + 0.34);
-  });
-  // 여러 명이 외치는 거친 질감: 모음 필터에 숨소리 노이즈도 같이 넣는다
-  const nv = audio.noiseSource(),
-    nvg = audio.gain(0);
-  nvg.gain.setValueAtTime(0.0001, t);
-  nvg.gain.exponentialRampToValueAtTime(0.5, t + 0.03);
-  nvg.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
-  nv.connect(nvg).connect(pre);
-  nv.start(t, rand(0, 2));
-  nv.stop(t + 0.32);
-  for (const [f, q, a] of F) {
-    const bp = audio.filter('bandpass', f, q),
-      g = audio.gain(a);
-    pre.connect(bp).connect(g).connect(mix);
-  }
-  const t1 = Math.max(0, t - 0.01);
-  const n = audio.noiseSource(),
-    bp = audio.filter('bandpass', 1600, 0.8),
-    ng = audio.gain(0);
-  AudioEngine.envAD(ng.gain, t1, 0.005, 0.25, 0.05);
-  n.connect(bp).connect(ng).connect(mix);
-  n.start(t1, rand(0, 2));
-  n.stop(t + 0.08);
-  const sh = audio.ctx.createWaveShaper();
-  sh.curve = CURVE_SOFT;
-  const g = audio.gain(0);
-  g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(1.5 * v, t + 0.025);
-  g.gain.setValueAtTime(1.5 * v, t + 0.1);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
-  mix.connect(sh).connect(g).connect(MU.bus);
-  const rv = audio.gain(0.5);
-  g.connect(rv);
-  rv.connect(MU.hall);
-}
-
-function mArp(t, m, cut, v = 1) {
-  const o = audio.osc('square', mtof(m)),
-    o2 = audio.osc('sawtooth', mtof(m)),
-    lp = audio.filter('lowpass', cut, 2),
-    g = audio.gain(0),
-    g2 = audio.gain(0.6);
-  o2.detune.value = 8;
-  lp.frequency.setValueAtTime(cut * 1.6, t);
-  lp.frequency.exponentialRampToValueAtTime(cut * 0.5, t + 0.09);
-  AudioEngine.envAD(g.gain, t, 0.001, 0.2 * v, 0.085);
-  o.connect(lp);
-  o2.connect(g2).connect(lp);
-  lp.connect(g).connect(MU.duck);
-  o.start(t);
-  o2.start(t);
-  o.stop(t + 0.1);
-  o2.stop(t + 0.1);
-  const ds = audio.gain(0.3);
-  g.connect(ds);
-  ds.connect(MU.delay);
-}
-// 브레이크용 긴장 패드 (반음 뭉친 화음이 서서히 열린다)
-function mPad(t, notes, dur, v = 1) {
-  const lp = audio.filter('lowpass', 600, 1.2);
-  lp.frequency.setValueAtTime(500, t);
-  lp.frequency.exponentialRampToValueAtTime(2600, t + dur);
-  const g = audio.gain(0);
-  g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(0.07 * v, t + dur * 0.5);
-  g.gain.setValueAtTime(0.07 * v, t + dur - 0.05);
-  g.gain.linearRampToValueAtTime(0, t + dur);
-  for (const m of notes)
-    for (const d of [-12, 0, 12]) {
-      const o = audio.osc('sawtooth', mtof(m));
-      o.detune.value = d;
-      o.connect(lp);
-      o.start(t);
-      o.stop(t + dur + 0.05);
-    }
-  lp.connect(g).connect(MU.bus);
-  const rv = audio.gain(0.5);
-  g.connect(rv);
-  rv.connect(MU.hall);
-}
-
-function mDrone(t, m, dur, v = 1) {
-  const f = mtof(m),
-    o = audio.osc('sine', f),
-    o2 = audio.osc('sawtooth', f),
-    lp = audio.filter('lowpass', 220, 1),
-    g = audio.gain(0),
-    g2 = audio.gain(0.35);
-  g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(0.1 * v, t + 0.05);
-  g.gain.setValueAtTime(0.1 * v, t + dur - 0.1);
-  g.gain.linearRampToValueAtTime(0, t + dur);
-  o.connect(g);
-  o2.connect(g2).connect(lp).connect(g);
-  g.connect(MU.bus);
-  o.start(t);
-  o2.start(t);
-  o.stop(t + dur + 0.02);
-  o2.stop(t + dur + 0.02);
-}
-
-function mTimp(t, v = 1, f = 73) {
-  const o = audio.osc('sine', f),
-    g = audio.gain(0);
-  o.frequency.setValueAtTime(f * 1.3, t);
-  o.frequency.exponentialRampToValueAtTime(f, t + 0.03);
-  o.frequency.exponentialRampToValueAtTime(f * 0.85, t + 0.4);
-  AudioEngine.envAD(g.gain, t, 0.002, 0.55 * v, 0.42);
-  const sh = audio.ctx.createWaveShaper();
-  sh.curve = A.shaper;
-  o.connect(g).connect(sh).connect(MU.bus);
-  o.start(t);
-  o.stop(t + 0.5);
-  const n = audio.noiseSource(),
-    lp = audio.filter('lowpass', 900, 0.8),
-    ng = audio.gain(0);
-  AudioEngine.envAD(ng.gain, t, 0.001, 0.3 * v, 0.03);
-  n.connect(lp).connect(ng).connect(MU.bus);
-  n.start(t, rand(0, 2));
-  n.stop(t + 0.05);
-  const rv = audio.gain(0.35);
-  g.connect(rv);
-  rv.connect(MU.hall);
-}
-
-function mCrash(t, v = 1) {
-  const n = audio.noiseSource(),
-    hp = audio.filter('highpass', 3200, 0.5),
-    g = audio.gain(0);
-  AudioEngine.envAD(g.gain, t, 0.001, 0.26 * v, 1.1);
-  n.connect(hp).connect(g).connect(MU.bus);
-  n.start(t, rand(0, 2));
-  n.stop(t + 1.2);
-  for (const f of [3100, 4730, 6210]) {
-    const o = audio.osc('square', f),
-      og = audio.gain(0);
-    AudioEngine.envAD(og.gain, t, 0.001, 0.02 * v, 0.6);
-    o.connect(og).connect(MU.bus);
-    o.start(t);
-    o.stop(t + 0.7);
-  }
-  const rv = audio.gain(0.3);
-  g.connect(rv);
-  rv.connect(MU.hall);
-}
-
-function mTom(t, f, v = 1) {
-  const o = audio.osc('triangle', f),
-    g = audio.gain(0);
-  o.frequency.setValueAtTime(f * 1.15, t);
-  o.frequency.exponentialRampToValueAtTime(f * 0.6, t + 0.16);
-  AudioEngine.envAD(g.gain, t, 0.001, 0.45 * v, 0.18);
-  const sh = audio.ctx.createWaveShaper();
-  sh.curve = A.shaper;
-  o.connect(g).connect(sh).connect(MU.bus);
-  o.start(t);
-  o.stop(t + 0.22);
-  const rv = audio.gain(0.25);
-  g.connect(rv);
-  rv.connect(MU.verb);
-}
-
-function mSweep(t, dur, v = 1) {
-  const n = audio.noiseSource(),
-    bp = audio.filter('bandpass', 400, 1.2),
-    g = audio.gain(0);
-  bp.frequency.setValueAtTime(400, t);
-  bp.frequency.exponentialRampToValueAtTime(8000, t + dur);
-  g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(0.28 * v, t + dur * 0.95);
-  g.gain.linearRampToValueAtTime(0, t + dur);
-  n.connect(bp).connect(g).connect(MU.bus);
-  n.start(t, rand(0, 2));
-  n.stop(t + dur + 0.02);
-}
-// 후버 사이렌: 한 옥타브 올라가며 필터가 열린다 (드롭 직전)
-function mRise(t, m, dur, v = 1) {
-  const f = mtof(m),
-    lp = audio.filter('lowpass', 800, 2),
-    g = audio.gain(0);
-  lp.frequency.setValueAtTime(700, t);
-  lp.frequency.exponentialRampToValueAtTime(5000, t + dur);
-  g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(0.1 * v, t + 0.1);
-  g.gain.exponentialRampToValueAtTime(0.16 * v, t + dur);
-  g.gain.linearRampToValueAtTime(0, t + dur + 0.01);
-  for (const det of [-20, 0, 20]) {
-    const o = audio.osc('sawtooth', f);
-    o.detune.value = det;
-    o.frequency.setValueAtTime(f, t);
-    o.frequency.exponentialRampToValueAtTime(f * 2, t + dur);
-    o.connect(lp);
-    o.start(t);
-    o.stop(t + dur + 0.02);
-  }
-  const sh = audio.ctx.createWaveShaper();
-  sh.curve = CURVE_SOFT;
-  lp.connect(sh).connect(g).connect(MU.bus);
-  const rv = audio.gain(0.3);
-  g.connect(rv);
-  rv.connect(MU.hall);
-}
-
-// ── 시퀀스 ──
-// 40마디 한 바퀴: H(0~3) 히트 인트로 → A(4~11) 후버 리프 → B(12~19) 아르페지오 → X(20~23) 브레이크·빌드업 → A2(24~31) → B2(32~39)
-function musicStep(n, t) {
-  const bar = n >> 4,
-    s = n & 15;
-  const k = bar < 2 ? bar : (bar - 2) % LOOP_BARS;
-  const si = k < 4 ? 0 : k < 12 ? 1 : k < 20 ? 2 : k < 24 ? 3 : k < 32 ? 4 : 5;
-  const sec = 'HABXAB'[si],
-    kk = k - [0, 4, 12, 20, 24, 32][si],
-    lastBar = kk === [4, 8, 8, 4, 8, 8][si] - 1,
-    second = si >= 4;
-  const ci = k % 4,
-    root = ROOTS[ci],
-    X = sec === 'X',
-    pcm = root + 24;
-  const h = (v) => mOrch(t, root, v),
-    sh = (v, kind) => mShout(t, v, kind);
-  // ── 드럼 ──
-  if (!X) {
-    if (s % 4 === 0) mKick(t);
-    if (s === 4 || s === 12) mSnare(t, 1);
-    if (lastBar && s > 12 && sec !== 'H' && sec !== 'B2') mSnare(t, 0.5 + (s - 13) * 0.15);
-    if (lastBar && s >= 8 && sec === 'B2') mTom(t, 260 - (s - 8) * 24, 0.9);
-    if (lastBar && s > 12 && sec === 'B') mTom(t, 220 - (s - 13) * 30, 0.8);
-    if (s % 4 === 2) mHat(t, 1, true);
-    else mHat(t, s % 2 === 0 ? 0.75 : 0.4, false);
-  } else {
-    if (kk === 2 && (s === 0 || s === 8)) mKick(t);
-    if (kk === 3 && s < 12 && s % 4 === 0) mKick(t);
-    if (kk === 2) mSnare(t, 0.3 + s * 0.025);
-    if (kk === 3 && s < 12) {
-      mSnare(t, 0.45 + s * 0.045);
-      mSnare(t + S16 / 2, 0.4 + s * 0.045);
-    }
-    if (kk < 2) {
-      if (s % 2 === 0) mHat(t, 0.3, false);
-    } else if (kk === 2 || s < 12) {
-      if (s % 4 === 2) mHat(t, kk === 2 ? 0.7 : 0.9, true);
-      else mHat(t, kk === 2 ? 0.45 : 0.6, false);
-    }
-  }
-  if (s === 0 && (kk === 0 || (sec === 'H' && kk === 2))) mCrash(t, sec === 'H' ? 1 : 0.8); // H 2마디째는 반복 이음매 착지점
-  // ── 베이스 ──
-  if (!X) {
-    const p = BASS_PAT[s];
-    mBass(t, root + p, S16 * 0.85, p ? 1 : 0.3);
-  } else if (kk === 2 && s % 2 === 0) mBass(t, root, S16 * 1.2, 0.15);
-  else if (kk === 3 && s < 12) mBass(t, root + (s % 4 === 2 ? 12 : 0), S16 * 0.85, 0.3 + s / 14);
-  // ── 후버 ──
-  if (sec === 'H') {
-    if (s === 0 || s === 6) mStab(t, pcm, 2, 1);
-    else if (s === 12) mStab(t, pcm, kk % 2 ? 1 : 2, 1);
-    if (kk % 2 && s === 14) mStab(t, pcm + 1, 1, 0.9);
-  } else if (sec === 'A') {
-    for (const [ss, m, d] of RIFF[ci])
-      if (ss === s) mStab(t, m, d, second ? 1 : 0.92);
-  } else if (sec === 'B') {
-    for (const [ss, m, d] of RIFF[ci])
-      if (ss === s && (ss <= 6 || ci === 3)) mStab(t, m, d, 0.85);
-  }
-  // ── 아르페지오 ──
-  if (sec === 'B') mArp(t, ARP[ci][s], second ? 3200 : 2600, 1);
-  else if (sec === 'A' && second && s % 2 === 1) mArp(t, ARP[0][s], 1700, 0.55);
-  else if (X && kk >= 2 && !(kk === 3 && s >= 12)) mArp(t, ARP[0][s], 500 + ((kk - 2) * 16 + s) * 90, 0.9);
-  // ── 오케스트라 히트 ──
-  if (sec === 'H') {
-    if (s === 0) h(1);
-    else if (s === 6) h(0.8);
-    else if (s === 12 && kk % 2 === 0) h(0.8);
-    else if (kk === 3 && (s === 12 || s === 14)) h(0.75);
-  } else if (X) {
-    if (kk === 0 && s === 0) h(1.1);
-    else if (kk === 1 && s === 0) h(0.6);
-    else if (kk === 3 && s === 12) h(1);
-  } else if (!second) {
-    if (s === 0 && kk % 4 === 0) h(1);
-    else if (lastBar && (s === 12 || s === 14)) h(0.75);
-  } else if (s === 0 && kk % 2 === 0) h(1);
-  else if (lastBar && (s === 6 || s === 12 || s === 14)) h(0.8);
-  // ── 함성 ──
-  if (sec === 'H') {
-    if (s === 0 && kk % 2 === 0) sh(1, 0);
-    else if (kk === 3 && s === 12) sh(1, 0);
-    else if (kk === 3 && s === 14) sh(0.8, 0);
-  } else if (X) {
-    if (s === 0 || (kk >= 1 && s === 8) || (kk === 3 && s === 4)) sh(kk === 3 ? 1 : 0.8, 1);
-    if (kk === 3 && s === 12) sh(1.2, 0);
-  } else {
-    if (kk % 4 === 3 && s === 14) sh(0.9, 0);
-    if (lastBar && s === 12 && sec === 'B') sh(0.9, 0);
-    if (lastBar && s === 0 && sec === 'B' && second) sh(1, 0);
-  }
-  // ── 브레이크 장식 ──
-  if (X && kk === 0 && s === 0) {
-    mPad(t, [50, 51, 57, 62], SPB * 16, 1);
-    mSweep(t, S16 * 60, 1);
-    mDrone(t, 38, SPB * 8, 1);
-    mTimp(t, 1, 73);
-  }
-  if (X && kk === 1 && s >= 8) mTimp(t, 0.25 + (s - 8) * 0.07, 73);
-  if (X && kk === 3 && s < 12 && s % 2 === 0) mTimp(t, 0.3 + s * 0.05, 73);
-  if (X && kk === 2 && s === 0) mRise(t, 62, S16 * 28, 1); // 드롭 직전 한 박은 비운다 (함성과 잔향만)
 }
 
 // ───────────────────────── 캔버스 텍스처 ─────────────────────────
@@ -938,8 +133,7 @@ function texOf(c, o = {}) {
 
 // 바닥: 아주 옅은 줄눈
 function makeFloorTex() {
-  const c = cnv(256, 256),
-    g = c.getContext('2d');
+  const c = cnv(256, 256), g = c.getContext('2d');
   g.fillStyle = '#ffffff';
   g.fillRect(0, 0, 256, 256);
   g.strokeStyle = 'rgba(110, 100, 140, 0.085)';
@@ -5191,8 +4385,7 @@ function tryCling(p, H) {
     p.state = 'press';
     return;
   }
-  let best = -1,
-    bd = 1e9;
+  let best = -1, bd = 1e9;
   for (let s = 0; s < SLOTS.length; s++) {
     if (H.slotOcc[s]) continue;
     const sx = H.x + SLOTS[s].x,
@@ -5248,7 +4441,7 @@ function speechTick(p, dt, d) {
     mine = p.host === ME;
   p.speakCD = cling ? rand(2.4, 4.8) : rand(1.5, 4.0) * (d > 7 ? 1.5 : 1);
   if (p.vo && !p.vo.stopped) return;
-  if (d > 14 || voicesPlaying() >= MAXV) return;
+  if (d > 14 || audio.isVoicePlaying() >= MAXV) return;
   const vol = cling && mine ? 0.5 : THREE.MathUtils.clamp(1.2 - d * 0.075, 0.28, 1) * (cling ? 0.7 : 1);
   const pan = screenPan(p.x, p.z);
   const key = cling ? p.voiceKey.replace(/^g_/, 'f_') : p.voiceKey;
@@ -5552,10 +4745,7 @@ function spawnFlanks() {
       const r = rand(12, 13.5),
         x = ME.x + Math.sin(a) * r,
         z = ME.z - Math.cos(a) * r;
-      const p = newPerson(x, z, {
-        kind: 1,
-        yaw: Math.atan2(ME.x - x, ME.z - z)
-      });
+      const p = newPerson(x, z, { kind: 1, yaw: Math.atan2(ME.x - x, ME.z - z) });
       if (p) p.speakCD = rand(0.5, 2);
     }
 }
@@ -6543,12 +5733,7 @@ function burstSim(dt) {
       if (!GAME_MOD.auto) b.cd = 0.075;
       const c = ME.clingers[0];
       const hand = SLOTS[c.slot].x >= 0 ? 0 : 1;
-      ME.stab = {
-        hand,
-        t: 0.03,
-        target: c,
-        done: true
-      };
+      ME.stab = { hand, t: 0.03, target: c, done: true };
       sfx.stab(hand === 0 ? 0.3 : -0.3);
       stabHit(c);
     }
@@ -7798,6 +6983,7 @@ function startOutburst() {
   G.stick.x = G.stick.z = 0;
   arrowEl.hidden = true;
   arrowShown = false;
+  music.stop(true);
   musicStop(true);
   ME.five = null;
   for (const a of ALLIES) {
@@ -8659,21 +7845,11 @@ function placeTypeCaret(ty) {
 function typeLine(el, text, speed = 0.05) {
   const layout = typeLayouts.get(el);
   const chars = layout && layout.text === text ? layout.chars : prepareTypeLine(el, text);
-  chars.forEach((ch) => {
-    ch.style.visibility = 'hidden';
-  });
+  chars.forEach((ch) => ch.style.visibility = 'hidden');
   const caret = document.createElement('span');
   caret.className = 'caret';
   el.append(caret);
-  const ty = {
-    el,
-    chars,
-    caret,
-    text,
-    i: 0,
-    t: 0,
-    speed
-  };
+  const ty = { el, chars, caret, text, i: 0, t: 0, speed };
   placeTypeCaret(ty);
   typers.push(ty);
 }
@@ -8717,7 +7893,7 @@ function resetWorld() {
   resetWrists();
   SEQ = [];
   typers.length = 0;
-  stopAllVoices();
+  audio.stopAllVoices();
   clearBubbles();
   clearCrowd();
   persons.length = 0;
@@ -8859,10 +8035,8 @@ function noticeSteps(t0) {
         }]
       ]));
     }],
-    [t0 + 1.55, () => {
-      if (ok()) sfx.riser(audio.ctx.currentTime, SPB * 4);
-    }],
-    [t0 + 1.55 + SPB * 4, () => drop()],
+    [t0 + 1.55, () => { if (audio.running) sfx.riser(audio.ctx.currentTime, music.spb * 4); }],
+    [t0 + 1.55 + music.spb * 4, () => drop()],
   ];
 }
 
@@ -8900,10 +8074,10 @@ function drop() {
   G.state = 'play';
   G.ctrl = true;
   G.playT = 0;
-  const t = ok() ? audio.ctx.currentTime + 0.03 : 0;
-  if (ok()) {
+  const t = audio.running ? audio.ctx.currentTime + 0.03 : 0;
+  if (audio.running) {
     sfx.impact(t);
-    musicStart(t, 32);
+    music.start(t, 32);
   }
   const slam = $('slam');
   slam.hidden = false;
@@ -8946,8 +8120,8 @@ function startEnding() {
   clearItems();
   weaponEl.classList.remove('down');
   weaponUp();
-  musicStop(true);
-  stopAllVoices();
+  music.stop(true);
+  audio.stopAllVoices();
   clearBubbles();
   weaponEl.hidden = true;
   $('hint').hidden = true;
@@ -9208,7 +8382,7 @@ function startEnterHouse() {
   rescueNoticeEl.hidden = true;
   hideToast();
   clearItems();
-  musicStop(false);
+  music.stop();
   CAM.zoomTo = 0.84;
 }
 
@@ -9254,8 +8428,8 @@ function goInside() {
     shirt: shirtBloodN,
   };
   const hash = Link.write({ dir: 'in', kills: G.kills, main });
-  stopAllVoices();
-  musicStop(true);
+  audio.stopAllVoices();
+  music.stop(true);
   G.paused = true;
   location.replace('./gosiwon.html' + location.search + hash);
 }
@@ -9381,17 +8555,17 @@ function resumeFromHouse() {
   // 소리: 휴대폰은 손을 뗄 때 켜지기도 하므로, 켜지는 순간에 맞춰 문 소리와 음악을 낸다
   let kicked = false;
   const kick = () => {
-    if (kicked || !ok()) return;
+    if (kicked || !audio.running) return;
     kicked = true;
     const t = audio.ctx.currentTime + 0.03;
     sfx.doorSlamOut();
     sfx.impact(t);
-    musicStart(t, 32);
+    music.start(t, 32);
   };
-  if (ok()) kick();
+  if (audio.running) kick();
   else if (audio.ctx) {
     const onState = () => {
-      if (!ok()) return;
+      if (!audio.running) return;
       audio.ctx.removeEventListener('statechange', onState);
       if (G.state === 'play') kick();
     };
@@ -9533,6 +8707,16 @@ function setPR(v) {
 function lowerQuality() {
   while (qStep < QSTEPS.length) if (QSTEPS[qStep++]()) return;
 }
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    G.paused = true;
+    if (audio.ctx && audio.ctx.state === 'running') audio.ctx.suspend();
+  } else {
+    G.paused = false;
+    lastNow = performance.now();
+    if (audio.ctx && audio.ctx !== 'title') audio.ctx.resume();
+  }
+})
 
 // 시작 준비: 글꼴을 기다렸다가 버튼 활성화
 function ready() {
