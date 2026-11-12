@@ -20,15 +20,15 @@ const DEFAULTS = {
 
 export default class AudioEngine {
   /**
+   * @param {boolean}  [muted=false]
    * @param {object}   [options]
-   * @param {boolean}  [options.muted=false]
    * @param {object|Function} [options.voiceData]  { 이름: { b: '파일명' } } 또는 이를 반환하는 함수
    * @param {Function} [options.onInit]     최초 초기화 직후
    * @param {Function} [options.onReady]    초기화 400ms 뒤 (ex: 음악 버퍼 렌더링)
    * @param {Function} [options.onRebuild]  버스 재구성 직후 (ex: 음악 재시작)
    * @param {object}   [options.config]     DEFAULTS 덮어쓰기
    */
-  constructor(options = {}) {
+  constructor(muted, options = {}) {
     this.cfg = { ...DEFAULTS, ...(options.config || {}) };
     this.voiceData = options.voiceData;
     this.hooks = {
@@ -38,7 +38,7 @@ export default class AudioEngine {
     };
 
     this.ctx = null;
-    this.muted = !!options.muted;
+    this.muted = muted;
 
     /** 노드 모음 (기존 전역 A 대체) */
     this.nodes = {};
@@ -53,11 +53,6 @@ export default class AudioEngine {
     this._watchTimer = 0;
     this._lastRebuild = -Infinity;
     this._readyTimeout = null;
-    this._visibilityBound = () => { if (!document.hidden) this.resume(); };
-    this._onStateChange = () => {
-      const s = this.ctx?.state;
-      if (s === 'suspended' || s === 'interrupted') this.resume();
-    };
   }
 
   /* ───────────── 접근자 ───────────── */
@@ -82,7 +77,7 @@ export default class AudioEngine {
   /** 사용자 제스처 안에서 호출. 여러 번 호출해도 안전. */
   init() {
     if (this.ctx) {
-      this.resume();
+      if (this.ctx.state === 'suspended') this.ctx.resume();
       return true;
     }
 
@@ -104,12 +99,9 @@ export default class AudioEngine {
 
     this._buildOutputChain();
 
-    this.ctx.addEventListener('statechange', this._onStateChange);
-    document.addEventListener('visibilitychange', this._visibilityBound);
-
     this.hooks.onInit?.(this);
     this.voicesReady = this.loadVoices();
-    this.resume();
+    if (this.ctx.state === 'suspended') this.ctx.resume();
     this._readyTimeout = setTimeout(() => this.hooks.onReady?.(this), 400);
     return true;
   }
@@ -119,27 +111,14 @@ export default class AudioEngine {
     const ctx = this.ctx;
     if (!ctx || ctx.state === 'running' || ctx.state === 'closed') return;
     try {
-      const p = ac.resume();
+      const p = ctx.resume();
       if (p && p.catch) p.catch(() => {});
     } catch { }
   }
 
   /** 첫 사용자 입력에서 init/resume. 해제 함수를 반환한다. */
-  autoUnlock(target = window, events = ['pointerdown', 'keydown', 'touchend']) {
-    const handler = () => this.init();
-    for (const e of events) target.addEventListener(e, handler, { passive: true });
-    return () => events.forEach(e => target.removeEventListener(e, handler));
-  }
-
-  dispose() {
-    clearTimeout(this._readyTimeout);
-    document.removeEventListener('visibilitychange', this._visibilityBound);
-    this.ctx?.removeEventListener('statechange', this._onStateChange);
-    this.stopAllVoices();
-    Object.values(this.nodes).forEach(n => this._disconnect(n));
-    this.ctx?.close?.().catch(() => { });
-    this.ctx = null;
-    this.nodes = {};
+  autoUnlock() {
+    for (const ev of ['pointerdown', 'keydown', 'touchend']) window.addEventListener(ev, () => this.resume(), true);
   }
 
   /* ───────────── 볼륨 / 뮤트 ───────────── */
@@ -317,8 +296,8 @@ export default class AudioEngine {
 
     if (document.hidden) return;
 
-    if (this.ctx.state !== 'running') {
-      if (this.ctx.state !== 'closed') this.resume();
+    if (this.ctx.state !== 'running' && this.ctx.state !== 'closed') {
+      this.resume();
       return;
     }
     if (this._outputIsCorrupted()) this.rebuild();
@@ -333,9 +312,7 @@ export default class AudioEngine {
     this.rebuildCount++;
 
     const n = this.nodes;
-    for (const key of ['comp', 'master', 'verb', 'verbOut', 'verbIn', 'tap', 'sfx', 'voice', 'music']) {
-      this._disconnect(n[key]);
-    }
+    for (const key of ['comp', 'master', 'verb', 'verbOut', 'verbIn', 'tap', 'sfx', 'voice', 'music']) this._disconnect(n[key]);
     this._buildOutputChain();
     this.hooks.onRebuild?.(this);
     return true;

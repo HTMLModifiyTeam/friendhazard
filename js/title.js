@@ -98,14 +98,13 @@ onResize();
 // ───────────────────────── 소리 ─────────────────────────
 let MUTED = !!store.get('muted', false);
 
-const audio = new AudioEngine({ MUTED, voiceData: () => VOICE_DATA });
-const music = new Music({ audio, score: { roots: ROOTS, bassPat: BASS_PAT, riff: RIFF, arp: ARP }});
+const audio = new AudioEngine(MUTED, { voiceData: () => VOICE_DATA });
+const sfx = new Sfx(audio);
+const music = new Music(audio, { roots: ROOTS, bassPat: BASS_PAT, riff: RIFF, arp: ARP });
 audio.hooks.onReady = () => music.prerender();
 audio.hooks.onRebuild = (a) => {
   if (music.on) music.start(a.time + .05, music.nowStep())
 };
-audio.autoUnlock();
-const sfx = new Sfx({ audio, isMuted: () => MUTED });
 
 function setMuted(m) {
   MUTED = m;
@@ -2812,8 +2811,8 @@ function fxUpdate(dt) {
       if (f.t <= 0) f.sp.visible = false;
     }
   }
-
   sfx.tinkBudget = Math.max(0, sfx.tinkBudget - dt * 5);
+
   // 주인공 텍스처 갱신은 몰아서
   FXDirty.t -= dt;
   if (FXDirty.t <= 0 && (FXDirty.face || FXDirty.shirt)) {
@@ -3711,12 +3710,14 @@ const GAME_MOD = {
   allPowers: false,
   silencer: false
 };
+
+const INIT_SPEED = 4.2;
 const ME = {
   x: 0,
   z: 0,
   vx: 0,
   vz: 0,
-  speed: 4.2,
+  speed: INIT_SPEED,
   phase: 0,
   walk: 0,
   pose: new Float32Array(NPOSE),
@@ -5511,12 +5512,7 @@ function stab() {
   if (!c) return;
   let hand = SLOTS[c.slot].x >= 0 ? 0 : 1;
   if (ME.five && ME.five.h === hand) hand = 1 - hand;
-  ME.stab = {
-    hand,
-    t: 0,
-    target: c,
-    done: false
-  };
+  ME.stab = { hand, t: 0, target: c, done: false };
   sfx.stab(hand === 0 ? 0.3 : -0.3);
   if (!G.stabbedOnce) {
     G.stabbedOnce = true;
@@ -5526,14 +5522,12 @@ function stab() {
 
 function stabHit(c) {
   if (c.state !== 'cling') return;
-  const dx = c.x - ME.x,
-    dz = c.z - ME.z,
-    d = Math.hypot(dx, dz) || 1;
+  const dx = c.x - ME.x, dz = c.z - ME.z, d = Math.hypot(dx, dz) || 1;
   kill(c, dx / d, dz / d, 'stab');
   bloodSpurt(c.tx, c.ty, c.tz, -dx / d * 0.5, 0.5, -dz / d * 0.5 + 0.3, 10);
   addShirtBlood(Math.floor(rand(2, 5)));
   if (Math.random() < 0.6) addMeFaceBlood(Math.floor(rand(1, 4)));
-  CAM.shake = Math.max(CAM.shake, 0.07);
+  if (!GAME_MOD.noRecoil) CAM.shake = Math.max(CAM.shake, 0.07);
 }
 
 // ── 집에서 들고 나온 산탄총 (오른손) ──
@@ -7226,13 +7220,16 @@ const modAuto = $('modAuto');
 const silencer = $('silencer');
 const modNoclip = $('modNoclip');
 const modAllPowers = $('modAllPowers');
+const modSpeed = $('modSpeed');
 const modMenuBtn = $('modmenubtn');
 
 function setModMenu(open) {
   modMenu.hidden = !open;
+  if (open) modSpeed.focus({ preventScroll: true });
 }
 
 function syncMainMods() {
+  ME.speed = Number(modSpeed.value) || INIT_SPEED;
   GAME_MOD.infiniteAmmo = modInfinite.checked;
   GAME_MOD.noRecoil = modRecoil.checked;
   GAME_MOD.aimbot = aimbot.checked;
@@ -7248,7 +7245,10 @@ function syncMainMods() {
   if (GAME_MOD.allPowers) for (const def of ITEM_DEFS) POWERS[def.key] = Infinity;
   else if (wasAllPowers) for (const def of ITEM_DEFS) POWERS[def.key] = ITEM_DURATION;
   updateItemStatus();
+  $('modSpeedValue').textContent = ME.speed.toFixed(1) + '×';
 }
+modSpeed.addEventListener('input', syncMainMods);
+
 for (const control of [modInfinite, modRecoil, aimbot, modAuto, modNoclip, modAllPowers, silencer]) control.addEventListener('change', syncMainMods);
 modClose.addEventListener('click', () => setModMenu(false));
 $('modRepel').addEventListener('click', () => G.modRepelT = 5);
@@ -8707,14 +8707,16 @@ function setPR(v) {
 function lowerQuality() {
   while (qStep < QSTEPS.length) if (QSTEPS[qStep++]()) return;
 }
+
+audio.autoUnlock();
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     G.paused = true;
-    if (audio.ctx && audio.ctx.state === 'running') audio.ctx.suspend();
+    if (audio.running) audio.ctx.suspend();
   } else {
     G.paused = false;
     lastNow = performance.now();
-    if (audio.ctx && audio.ctx !== 'title') audio.ctx.resume();
+    if (audio.ctx && G.state !== 'title') audio.ctx.resume();
   }
 })
 

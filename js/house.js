@@ -112,9 +112,8 @@ const _col = new THREE.Color();
 
 // ───────────────────────── 소리 ─────────────────────────
 let MUTED = !!store.get('muted', false);
-const audio = new AudioEngine({ muted: MUTED, voiceData: () => VOICE_DATA });
-audio.autoUnlock();
-const sfx = new Sfx({ audio, engine: AudioEngine, rand, isMuted: () => MUTED });
+const audio = new AudioEngine(MUTED, { voiceData: () => VOICE_DATA });
+const sfx = new Sfx(audio);
 
 function setMuted(m) {
   MUTED = m;
@@ -2881,26 +2880,12 @@ function buildProps() {
     dirt: 0
   })];
   const ammoGeo = new THREE.BoxGeometry(0.34, 0.17, 0.22);
-  for (const [x, z, n] of [
-    [29.0, 15.1, 18],
-    [24.6, 13.2, 18],
-    [8.4, 8.0, 18],
-    [26.2, 1.2, 18],
-    [2.0, 12.8, 18],
-    [31.3, 21.0, 18],
-    [12.0, 22.5, 18]
-  ]) {
+  for (const [x, z, n] of [[29.0, 15.1, 18], [24.6, 13.2, 18], [8.4, 8.0, 18], [26.2, 1.2, 18], [2.0, 12.8, 18], [31.3, 21.0, 18], [12.0, 22.5, 18]]) {
     const m = new THREE.Mesh(ammoGeo, ammoMat);
     m.position.set(x, 0.085, z);
     m.rotation.y = R() * TAU;
     LEVEL.group.add(m);
-    LEVEL.ammo.push({
-      m,
-      x,
-      z,
-      taken: false,
-      n
-    });
+    LEVEL.ammo.push({ m, x, z, taken: false, n });
   }
   // 산탄총: 끝방 침대 위
   const gun = makeShotgunModel(true);
@@ -4518,6 +4503,7 @@ function playerMove(dt, canMove) {
     for (const q of PL.clingers) w += q.kind === 2 ? 1.9 : 1;
     spd *= Math.max(0.16, 1 - 0.24 * w);
   }
+  spd *= GUN_MOD.modSpeed;
   const tx = (fx * fwd + rx * ix) * spd,
     tz = (fz * fwd + rz * ix) * spd;
   const k = (tx || tz) ? 11 : 14;
@@ -4834,7 +4820,7 @@ function vmLayout() {
 // ── 무기 상태 ──
 const GUN_MOD = {
   damage: 1,
-  rate: 1,
+  modSpeed: 1,
   infiniteAmmo: false,
   noRecoil: false,
   auto: false,
@@ -5257,8 +5243,10 @@ function shootShotgun() {
 }
 // 칼: 붙잡혔을 때 보고 있는 쪽에 붙은 사람부터
 function stab() {
-  WEP.stabT = 0.3;
-  WEP.stabCD = 0.3;
+  if (!GUN_MOD.auto) {
+    WEP.stabT = 0.3;
+    WEP.stabCD = 0.3;
+  }
   VM.knife.visible = true;
   VM.arms[0].gun.visible = false;
   sfx.swing(0.8);
@@ -5279,9 +5267,7 @@ function stab() {
   if (best) later(0.07, () => {
     if (best.state !== 'cling') return;
     sfx.stab(panOf(best.x, best.z), 1);
-    const dx = best.x - PL.x,
-      dz = best.z - PL.z,
-      L = Math.hypot(dx, dz) || 1;
+    const dx = best.x - PL.x, dz = best.z - PL.z, L = Math.hypot(dx, dz) || 1;
     killPerson(best, 'stab', dx / L, dz / L, 0.6);
     bloodBurst(best.hc.x, Math.max(0.12, best.hc.y - 0.35), best.hc.z, dx / L, dz / L, 14, 1);
     hitMarker(true);
@@ -5290,8 +5276,10 @@ function stab() {
 
 function melee() {
   if (WEP.stabCD > 0) return;
-  WEP.stabT = 0.3;
-  WEP.stabCD = 0.45;
+  if (!GUN_MOD.auto) {
+    WEP.stabT = 0.3;
+    WEP.stabCD = 0.45;
+  }
   VM.knife.visible = true;
   VM.arms[0].gun.visible = false;
   sfx.swing(1);
@@ -5324,11 +5312,7 @@ const decalGeo = new THREE.PlaneGeometry(1, 1);
 const aCell = new THREE.InstancedBufferAttribute(new Float32Array(DEC_MAX * 2), 2);
 decalGeo.setAttribute('aCell', aCell);
 const decalMat = new THREE.ShaderMaterial({
-  uniforms: Object.assign({
-    map: {
-      value: TEX.decal
-    }
-  }, LU),
+  uniforms: Object.assign({map: { value: TEX.decal }}, LU),
   transparent: true,
   depthWrite: false,
   polygonOffset: true,
@@ -7654,7 +7638,7 @@ function keysToVec() {
 const modMenu = $('modMenu');
 const modClose = $('modClose');
 const damageRange = $('modDamage');
-const damageValue = $('modDamageValue');
+const modSpeed = $('modSpeed');
 const modInfinite = $('modInfinite');
 const modRecoil = $('modRecoil');
 const modAuto = $('modAuto');
@@ -7666,11 +7650,15 @@ modMenuBtn.addEventListener('click', () => setModMenu(modMenu.hidden));
 modMenuBtn.style.display = IS_TOUCH ? 'block' : 'none';
 function setModMenu(open) {
   modMenu.hidden = !open;
-  if (open) damageRange.focus({ preventScroll: true });
+  if (open) {
+    damageRange.focus({ preventScroll: true });
+    modSpeed.focus({ preventScroll: true });
+  }
 }
 
 function syncModValues() {
   GUN_MOD.damage = Number(damageRange.value);
+  GUN_MOD.modSpeed = Number(modSpeed.value);
   GUN_MOD.infiniteAmmo = modInfinite.checked;
   GUN_MOD.noRecoil = modRecoil.checked;
   GUN_MOD.auto = modAuto.checked;
@@ -7684,14 +7672,15 @@ function syncModValues() {
     WEP.shotgun.reloadT = 0;
     hudAmmo(true);
   }
-  damageValue.textContent = GUN_MOD.damage.toFixed(1) + '×';
+  $('modDamageValue').textContent = GUN_MOD.damage.toFixed(1) + '×';
+  $('modSpeedValue').textContent = GUN_MOD.modSpeed.toFixed(1) + '×';
 }
 damageRange.addEventListener('input', syncModValues);
+modSpeed.addEventListener('input', syncModValues);
+
 for (const control of [modInfinite, modRecoil, modAuto, modNoclip, silencer]) control.addEventListener('change', syncModValues);
 modClose.addEventListener('click', () => setModMenu(false));
-$('modRepel').addEventListener('click', () => {
-  crowdRepelT = 5;
-});
+$('modRepel').addEventListener('click', () => crowdRepelT = 5);
 $('killAll').addEventListener('click', () => {
   for (const p of [...live]) killPerson(p, 'shot', 0, 1, 0);
 });
@@ -8016,6 +8005,8 @@ function frame(now) {
 }
 
 // ───────────────────────── 시작 준비 ─────────────────────────
+
+audio.autoUnlock();
 onResize();
 buildLevel();
 hashBuild();

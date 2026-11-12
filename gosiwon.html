@@ -119,8 +119,7 @@
         </svg>
       </button>
       <button id="pauseBtn" class="iconbtn" type="button" aria-label="일시정지" hidden>
-        <svg viewBox="0 0 24 24"
-          aria-hidden="true">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
           <rect x="6" y="5" width="4" height="14" rx="1" fill="#1f1a24" />
           <rect x="14" y="5" width="4" height="14" rx="1" fill="#1f1a24" />
         </svg>
@@ -135,9 +134,12 @@
           <circle cx="13" cy="17" r="2.5" fill="#1f1a24" />
         </svg>
       </button>
-      <section id="modMenu" class="mod-menu" hidden aria-label="무기 개조 메뉴">
+      <section id="modMenu" class="mod-menu" hidden aria-label="Modifier menu">
         <header><strong>MOD MENU</strong><button id="modClose" type="button" aria-label="닫기">×</button></header>
-        <label class="mod-control"><span>ATK <output id="modDamageValue">1.0×</output></span><input id="modDamage" type="range" min="1" max="5" step="0.5" value="1" aria-label="공격력 배율"></label>
+        <label class="mod-control">
+          <span>ATK <output id="modDamageValue">1.0×</output></span><input id="modDamage" type="range" min="1" max="5" step="0.5" value="1" aria-label="공격력 배율">
+          <span>SPD <output id="modSpeedValue">4.2×</output></span><input id="modSpeed" type="range" min="1" max="3" step="0.1" value="1" aria-label="이동속도">
+        </label>
         <div class="mod-options">
           <label class="mod-toggle"><span>Infinite ammo</span><input id="modInfinite" type="checkbox"></label>
           <label class="mod-toggle"><span>No recoil</span><input id="modRecoil" type="checkbox"></label>

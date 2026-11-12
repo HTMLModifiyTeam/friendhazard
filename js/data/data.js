@@ -19,139 +19,40 @@ export const OUTLINE = {
   res: { value: new Vector2(1, 1) }
 };
 
-export const ITEM_DEFS = [{
-  key: 'pierce',
-  name: '관통탄',
-  short: '관통',
-  color: '#168d9b'
-}, {
-  key: 'impact',
-  name: '충격탄',
-  short: '파괴',
-  color: '#d56b24'
-}, {
-  key: 'spread',
-  name: '산탄',
-  short: '산탄',
-  color: '#8660be'
-}];
+export const ITEM_DEFS = [
+  { key: 'pierce', name: '관통탄', short: '관통', color: '#168d9b' },
+  { key: 'impact', name: '충격탄', short: '파괴', color: '#d56b24' },
+  { key: 'spread', name: '산탄', short: '산탄', color: '#8660be' }
+];
 
-export const WAVES = [{
-  t0: 0,
-  t1: 14,
-  every: 1.3,
-  run: 0.12,
-  north: 0.68
-}, {
-  t0: 14,
-  t1: 40,
-  every: 0.95,
-  run: 0.48,
-  north: 0.58
-}, {
-  t0: 40,
-  t1: 85,
-  every: 0.78,
-  run: 0.65,
-  north: 0.48
-}, {
-  t0: 85,
-  t1: 130,
-  every: 0.66,
-  run: 0.76,
-  north: 0.40
-}];
+export const WAVES = [
+  { t0: 0, t1: 14, every: 1.3, run: 0.12, north: 0.68 },
+  { t0: 14, t1: 40, every: 0.95, run: 0.48, north: 0.58 },
+  { t0: 40, t1: 85, every: 0.78, run: 0.65, north: 0.48 },
+  { t0: 85, t1: 130, every: 0.66, run: 0.76, north: 0.40 }
+];
 
-export const SLOTS = [{
-  x: 0.0,
-  z: -0.37,
-  kind: 'stand'
-}, {
-  x: 0.31,
-  z: 0.13,
-  kind: 'kneel'
-}, {
-  x: -0.31,
-  z: 0.13,
-  kind: 'kneel'
-}, {
-  x: 0.56,
-  z: -0.08,
-  kind: 'side'
-}, {
-  x: -0.56,
-  z: -0.08,
-  kind: 'side'
-}, {
-  x: 0.34,
-  z: -0.34,
-  kind: 'stand'
-}, {
-  x: -0.34,
-  z: -0.34,
-  kind: 'stand'
-}, {
-  x: 0.0,
-  z: 0.5,
-  kind: 'low'
-}];
+export const SLOTS = [
+  { x: 0.0, z: -0.37, kind: 'stand' },
+  { x: 0.31, z: 0.13, kind: 'kneel' },
+  { x: -0.31, z: 0.13, kind: 'kneel' },
+  { x: 0.56, z: -0.08, kind: 'side' },
+  { x: -0.56, z: -0.08, kind: 'side' },
+  { x: 0.34, z: -0.34, kind: 'stand' },
+  { x: -0.34, z: -0.34, kind: 'stand' },
+  { x: 0.0, z: 0.5, kind: 'low' }
+];
 
-export const ALLY_DEFS = [{
-  shirt: '#8fdcbf', // 2급
-  hair: '#3b2a20',
-  bob: false
-}, {
-  shirt: '#c6b6f2', // 3급
-  hair: '#2a2024',
-  bob: true
-}, {
-  shirt: '#f7bccf', // 2급
-  hair: '#5a3a28',
-  bob: true
-}, {
-  shirt: '#f1da86', // 3급 (안경)
-  hair: '#1d1a1c',
-  bob: false
-}];
-
-export const ALLY_LOOK = [{
-  grade: 2,
-  eyeW: 42,
-  eyeH: 48,
-  hl: 2,
-  brow: '#3a2a20',
-  fem: false,
-  glasses: false,
-  smile: 15,
-  bags: false
-}, {
-  grade: 3,
-  eyeW: 37,
-  eyeH: 42,
-  hl: 1,
-  brow: '#2a2024',
-  fem: true,
-  glasses: false,
-  smile: 9,
-  bags: true
-}, {
-  grade: 2,
-  eyeW: 41,
-  eyeH: 47,
-  hl: 2,
-  brow: '#5a3a28',
-  fem: true,
-  glasses: false,
-  smile: 14,
-  bags: false
-}, {
-  grade: 3,
-  eyeW: 36,
-  eyeH: 41,
-  hl: 1,
-  brow: '#1d1a1c',
-  fem: false,
-  glasses: true,
-  smile: 8,
-  bags: true
-}];
+// ALLY DATA
+export const ALLY_DEFS = [
+  { shirt: '#8fdcbf', hair: '#3b2a20', bob: false }, // 2급 
+  { shirt: '#c6b6f2', hair: '#2a2024', bob: true }, // 3급 
+  { shirt: '#f7bccf', hair: '#5a3a28', bob: true },  // 2급 
+  { shirt: '#f1da86', hair: '#1d1a1c', bob: false }  // 3급 (안경)
+];
+export const ALLY_LOOK = [
+  { grade: 2, eyeW: 42, eyeH: 48, hl: 2, brow: '#3a2a20', fem: false, glasses: false, smile: 15, bags: false },
+  { grade: 3, eyeW: 37, eyeH: 42, hl: 1, brow: '#2a2024', fem: true, glasses: false, smile: 9, bags: true },
+  { grade: 2, eyeW: 41, eyeH: 47, hl: 2, brow: '#5a3a28', fem: true, glasses: false, smile: 14, bags: false },
+  { grade: 3, eyeW: 36, eyeH: 41, hl: 1, brow: '#1d1a1c', fem: false, glasses: true, smile: 8, bags: true }
+];

@@ -110,9 +110,8 @@ class SfxVoice {
 }
 
 export default class Sfx {
-  constructor({ audio, isMuted = () => false }) {
+  constructor(audio) {
     this.audio = audio;
-    this.isMuted = isMuted;
 
     this.tinkBudget = 0;
     this._ends = [];
@@ -123,16 +122,11 @@ export default class Sfx {
     this.hum = { on: false, dead: false };
   }
 
-  get canPlay() {
-    const ctx = this.audio.ctx;
-    return !!ctx && ctx.state === 'running' && !this.isMuted();
-  }
-
   /* ---------------- internals ---------------- */
 
   /** Voice limiter: drops low-priority sounds when the engine is busy. */
   _gate(prio, dur) {
-    if (!this.canPlay) return false;
+    if (!this.audio.running) return false;
     const now = this.audio.ctx.currentTime;
     const ends = this._ends;
     for (let i = ends.length - 1; i >= 0; i--) if (ends[i] <= now) ends.splice(i, 1);
@@ -328,7 +322,7 @@ export default class Sfx {
 
   /** Item pickup chirp. Bypasses the limiter so combat can't mask it. */
   itemPickup() {
-    if (!this.canPlay) return;
+    if (!this.audio.running) return;
     const notes = [[1318.51, 0, 0.07], [1760, 0.075, 0.07], [2637.02, 0.15, 0.16]];
     this._play({ at: 0.002, volume: 0.48 }, (s) => {
       for (const [f, at, decay] of notes) {
@@ -412,7 +406,7 @@ export default class Sfx {
 
   /** Big boom + gong. `t` is an absolute AudioContext time. */
   impact(t) {
-    if (!this.canPlay) return;
+    if (!this.audio.running) return;
     const base = 98;
     const partials = [[1, 3.6, 0.5], [1.483, 3.0, 0.42], [1.932, 2.6, 0.35], [2.546, 2.2, 0.3],
     [2.63, 2.0, 0.26], [3.358, 1.6, 0.2], [4.1, 1.2, 0.16], [5.4, 0.9, 0.1]];
@@ -434,7 +428,7 @@ export default class Sfx {
 
   /** Rising whoosh. `t` is an absolute AudioContext time. */
   riser(t, dur) {
-    if (!this.canPlay) return;
+    if (!this.audio.running) return;
     this._play({ time: t, volume: 0.6, reverb: 0.4 }, (s) => {
       s.noise({
         type: 'bandpass', freq: 300, q: 3, sweep: [[7000, dur]], len: dur + 0.02,
@@ -448,7 +442,7 @@ export default class Sfx {
   }
 
   doorSlamOut() {
-    if (!this.canPlay) return;
+    if (!this.audio.running) return;
     const t = this.audio.ctx.currentTime + 0.01;
     this._play({ time: t, volume: 1.05, reverb: 0.7 }, (s) => {
       s.tone({ freq: 115, sweep: [[42, 0.25]], len: 0.36, attack: 0.003, peak: 1.1, decay: 0.3 });
@@ -496,7 +490,7 @@ export default class Sfx {
 
   /** Picking up a weapon: pump + short low rumble. */
   getGun() {
-    if (!this.canPlay) return;
+    if (!this.audio.running) return;
     const t = this.audio.ctx.currentTime;
     this.pumpOut(0.05);
     this._play({ time: t, volume: 0.8, reverb: 0.9 }, (s) => {
@@ -527,7 +521,7 @@ export default class Sfx {
   }
 
   hitTick(kill) {
-    if (!this.canPlay) return;
+    if (!this.audio.running) return;
     this._play({ at: 0.01, volume: kill ? 0.3 : 0.2 }, (s) => {
       s.tone({ type: 'triangle', freq: kill ? 1650 : 2300, len: 0.1, attack: 0.0008, peak: 1, decay: kill ? 0.07 : 0.035 });
     });
@@ -607,7 +601,7 @@ export default class Sfx {
 
   /** items: [{ p (owner key), lv (0..1), pan (-1..1), occl (bool) }]. Call every frame. */
   dragAssign(items, dt = 1 / 60) {
-    if (!this.canPlay) return;
+    if (!this.audio.running) return;
     const r = rand, voices = this.drag.v, t = this.audio.ctx.currentTime;
     for (const v of voices) if (v.p && !items.some((it) => it.p === v.p)) v.p = null;
     for (const it of items) {
@@ -717,7 +711,7 @@ export default class Sfx {
 
   /** Digital door lock: beep-beep-beep-beep -> motor -> bolt. `t` is absolute. */
   lock(t) {
-    if (!this.canPlay) return;
+    if (!this.audio.running) return;
     this._play({ time: t, volume: 0.32, reverb: 0.12 }, (s) => {
       [1318.5, 1568, 1975.5, 2637].forEach((f, i) => {
         s.tone({ at: i * 0.07, type: 'square', freq: f, filter: ['lowpass', 5000, 0.7], len: 0.09, attack: 0.002, peak: 0.5, decay: 0.06 });
@@ -739,14 +733,14 @@ export default class Sfx {
 
   /** Bolt/latch. `t` is absolute. */
   latch(t, v = 1) {
-    if (!this.canPlay) return;
+    if (!this.audio.running) return;
     this._click(t, 900, 0.7 * v, 0.05, 2);
     this._click(t + 0.03, 2400, 0.45 * v, 0.03, 6);
   }
 
   /** Rattling a locked front door handle. */
   rattle() {
-    if (!this.canPlay) return;
+    if (!this.audio.running) return;
     const t = this.audio.ctx.currentTime + 0.01;
     for (const [d, v] of [[0, 1], [0.12, 0.85], [0.23, 0.6]]) {
       this._play({ time: t + d, volume: 0.6 * v, reverb: 0.3 }, (s) => {
@@ -760,7 +754,7 @@ export default class Sfx {
 
   /** Hinge creak: stick-slip friction. `t` is absolute. */
   creak(t, dur, v = 1, f0 = 150) {
-    if (!this.canPlay) return;
+    if (!this.audio.running) return;
     const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
     this._play({ time: t, volume: 0.55 * v, reverb: 0.45 }, (s) => {
       const a = s.audio, r = rand, N = 256;
@@ -792,7 +786,7 @@ export default class Sfx {
 
   /** Motion-sensor light "click". `t` is absolute. */
   sensor(t) {
-    if (!this.canPlay) return;
+    if (!this.audio.running) return;
     this._click(t, 3200, 0.45, 0.012, 9);
     this._click(t + 0.018, 1400, 0.25, 0.02, 4);
   }
@@ -826,7 +820,7 @@ export default class Sfx {
 
   /** Breaker trips: "thunk" + electrical zap. */
   breaker() {
-    if (!this.canPlay) return;
+    if (!this.audio.running) return;
     const r = rand;
     const t = this.audio.ctx.currentTime + 0.01;
     const segs = [];
@@ -855,7 +849,7 @@ export default class Sfx {
 
   /** Stepping out the door into the white space. */
   exitToWhite() {
-    if (!this.canPlay) return;
+    if (!this.audio.running) return;
     const t = this.audio.ctx.currentTime;
     this.latch(t, 1.2);
     this._play({ time: t, volume: 0.6, reverb: 0.7 }, (s) => {

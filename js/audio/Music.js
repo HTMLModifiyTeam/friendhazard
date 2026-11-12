@@ -5,7 +5,7 @@ const THIN_LAYERS = [[1, -18, 1, 'sawtooth'], [1, 18, 1, 'sawtooth']];
 const THICK_LAYERS = [[1, -22, 1, 'sawtooth'], [1, 0, 1, 'sawtooth'], [1, 22, 1, 'sawtooth'], [.5, 0, .55, 'square'], [2, 6, .3, 'sawtooth']];
 
 class MusicRig {
-  constructor(ctx, { dest, spb, makeIR, noiseBuffer, env }) {
+  constructor(ctx, { dest, spb, noiseBuffer, env }) {
     this.ctx = ctx;
     this.spb = spb;
     this.s16 = spb / 4;
@@ -73,11 +73,11 @@ class MusicRig {
     this.duck.connect(this.bus);
 
     this.verb = ctx.createConvolver();
-    this.verb.buffer = makeIR(ctx, 0.8, 4.2);
+    this.verb.buffer = Music.makeImpulse(ctx, 0.8, 4.2);
     this.verb.connect(this.gain(0.16)).connect(this.bus);
 
     this.hall = ctx.createConvolver();
-    this.hall.buffer = makeIR(ctx, 1.9, 2.8);
+    this.hall.buffer = Music.makeImpulse(ctx, 1.9, 2.8);
     this.hall.connect(this.gain(0.3)).connect(this.bus);
 
     this.delay = ctx.createDelay(1);
@@ -101,15 +101,15 @@ class Synth {
 
   /** 909-style: fast pitch drop, distorted, plus a click. Also ducks the bus. */
   kick(t, v = 1) {
-    const { osc, gain, filter, noise, shaper, ramp, go, goNoise, env, bus, duck } = this.r;
+    const { osc, gain, filter, noise, shaper, ramp, go, goNoise, bus, duck } = this.r;
     const o = osc('sine', 210), g = gain(0);
     ramp(o.frequency, t, 210, [[56, 0.045], [42, 0.26]]);
-    env(g.gain, t, 0.001, 1.1 * v, 0.33);
+    AudioEngine.envAD(g.gain, t, 0.001, 1.1 * v, 0.33);
     o.connect(g).connect(shaper(this.curves.hard, '2x')).connect(gain(0.85)).connect(bus);
     go(o, t, t + 0.36);
 
     const n = noise(), gn = gain(0);
-    env(gn.gain, t, 0.0005, 0.32 * v, 0.016);
+    AudioEngine.envAD(gn.gain, t, 0.0005, 0.32 * v, 0.016);
     n.connect(filter('highpass', 2600, 0.8)).connect(gn).connect(bus);
     goNoise(n, t, t + 0.03);
 
@@ -119,11 +119,11 @@ class Synth {
 
   /** Two body tones + clap-like triple noise burst + gated reverb. */
   snare(t, v = 1) {
-    const { osc, gain, filter, noise, ramp, go, goNoise, env, bus, verb } = this.r;
+    const { osc, gain, filter, noise, ramp, go, goNoise, bus, verb } = this.r;
     for (const [f0, f1, a, d] of [[185, 150, 0.5, 0.12], [330, 280, 0.25, 0.08]]) {
       const o = osc('triangle', f0), g = gain(0);
       ramp(o.frequency, t, f0, [[f1, 0.06]]);
-      env(g.gain, t, 0.001, a * v, d);
+      AudioEngine.envAD(g.gain, t, 0.001, a * v, d);
       o.connect(g).connect(bus);
       go(o, t, t + d + 0.02);
     }
@@ -150,17 +150,17 @@ class Synth {
   }
 
   hat(t, v, open) {
-    const { gain, filter, noise, goNoise, env, bus } = this.r;
+    const { gain, filter, noise, goNoise, bus } = this.r;
     const n = noise(), pk = filter('peaking', 10000, 1.2), g = gain(0);
     pk.gain.value = 6;
-    env(g.gain, t, 0.0006, (open ? 0.2 : 0.14) * v, open ? 0.2 : 0.03);
+    AudioEngine.envAD(g.gain, t, 0.0006, (open ? 0.2 : 0.14) * v, open ? 0.2 : 0.03);
     n.connect(filter('highpass', open ? 6000 : 7500, 0.7)).connect(pk).connect(g).connect(bus);
     goNoise(n, t, t + (open ? 0.26 : 0.05));
   }
 
   /** Saw + square + sub through a resonant filter that opens on accents. */
   bass(t, m, dur, acc) {
-    const { osc, gain, filter, shaper, ramp, go, env, duck } = this.r;
+    const { osc, gain, filter, shaper, ramp, go, duck } = this.r;
     const f = mtof(m);
     const o1 = osc('sawtooth', f), o2 = osc('square', f), sub = osc('sine', f);
     o1.detune.value = -6;
@@ -168,8 +168,8 @@ class Synth {
     const lp = filter('lowpass', 800, 5);
     ramp(lp.frequency, t, 420 + 2200 * acc, [[170, dur]]);
     const g = gain(0), g2 = gain(0.35), gs = gain(0);
-    env(g.gain, t, 0.002, 0.3 * (0.85 + acc * 0.3), dur);
-    env(gs.gain, t, 0.002, 0.22, dur);
+    AudioEngine.envAD(g.gain, t, 0.002, 0.3 * (0.85 + acc * 0.3), dur);
+    AudioEngine.envAD(gs.gain, t, 0.002, 0.22, dur);
     o1.connect(lp);
     o2.connect(g2).connect(lp);
     lp.connect(shaper(this.curves.soft)).connect(g).connect(duck);
@@ -216,7 +216,7 @@ class Synth {
 
   /** Orchestra hit: stacked minor-triad brass + timpani thump + snap, big hall. */
   orch(t, root, v = 1) {
-    const { osc, gain, filter, noise, shaper, ramp, go, goNoise, env, send, bus, hall } = this.r;
+    const { osc, gain, filter, noise, shaper, ramp, go, goNoise, send, bus, hall } = this.r;
     const lp = filter('lowpass', 5000, 0.9);
     ramp(lp.frequency, t, 6000, [[1300, 0.35]]);
     const g = gain(0);
@@ -238,12 +238,12 @@ class Synth {
 
     const o = osc('sine', 110), og = gain(0);
     ramp(o.frequency, t, 120, [[52, 0.2]]);
-    env(og.gain, t, 0.002, 0.6 * v, 0.3);
+    AudioEngine.envAD(og.gain, t, 0.002, 0.6 * v, 0.3);
     o.connect(og).connect(bus);
     go(o, t, t + 0.35);
 
     const n = noise(), ng = gain(0);
-    env(ng.gain, t, 0.001, 0.4 * v, 0.04);
+    AudioEngine.envAD(ng.gain, t, 0.001, 0.4 * v, 0.04);
     n.connect(filter('bandpass', 1800, 1)).connect(ng).connect(bus);
     goNoise(n, t, t + 0.06);
 
@@ -253,7 +253,7 @@ class Synth {
 
   /** Crowd shout: five saws (five guys) through vowel formants. kind 0 = "hey!", 1 = "huh!" */
   shout(t, v = 1, kind = 0) {
-    const { osc, gain, filter, noise, shaper, ramp, go, goNoise, env, send, bus, hall } = this.r;
+    const { osc, gain, filter, noise, shaper, ramp, go, goNoise, send, bus, hall } = this.r;
     const F = kind ? [[640, 8, 1], [1150, 9, 0.5], [2500, 10, 0.25]]  : [[600, 7, 1], [1900, 9, 0.55], [2600, 10, 0.3]];
     const mix = gain(0.22), pre = gain(1);
     for (const b of [118, 136, 152, 171, 196]) {
@@ -274,7 +274,7 @@ class Synth {
     // consonant burst
     const t1 = Math.max(0, t - 0.01);
     const n = noise(), ng = gain(0);
-    env(ng.gain, t1, 0.005, 0.25, 0.05);
+    AudioEngine.envAD(ng.gain, t1, 0.005, 0.25, 0.05);
     n.connect(filter('bandpass', 1600, 0.8)).connect(ng).connect(mix);
     goNoise(n, t1, t + 0.08);
 
@@ -288,13 +288,13 @@ class Synth {
   }
 
   arp(t, m, cut, v = 1) {
-    const { osc, gain, filter, ramp, go, env, send, duck, delay } = this.r;
+    const { osc, gain, filter, ramp, go, send, duck, delay } = this.r;
     const f = mtof(m);
     const o = osc('square', f), o2 = osc('sawtooth', f);
     const lp = filter('lowpass', cut, 2), g = gain(0);
     o2.detune.value = 8;
     ramp(lp.frequency, t, cut * 1.6, [[cut * 0.5, 0.09]]);
-    env(g.gain, t, 0.001, 0.2 * v, 0.085);
+    AudioEngine.envAD(g.gain, t, 0.001, 0.2 * v, 0.085);
     o.connect(lp);
     o2.connect(gain(0.6)).connect(lp);
     lp.connect(g).connect(duck);
@@ -340,29 +340,29 @@ class Synth {
   }
 
   timp(t, v = 1, f = 73) {
-    const { osc, gain, filter, noise, shaper, ramp, go, goNoise, env, send, bus, hall } = this.r;
+    const { osc, gain, filter, noise, shaper, ramp, go, goNoise, send, bus, hall } = this.r;
     const o = osc('sine', f), g = gain(0);
     ramp(o.frequency, t, f * 1.3, [[f, 0.03], [f * 0.85, 0.4]]);
-    env(g.gain, t, 0.002, 0.55 * v, 0.42);
+    AudioEngine.envAD(g.gain, t, 0.002, 0.55 * v, 0.42);
     o.connect(g).connect(shaper(this.curves.soft)).connect(bus);
     go(o, t, t + 0.5);
 
     const n = noise(), ng = gain(0);
-    env(ng.gain, t, 0.001, 0.3 * v, 0.03);
+    AudioEngine.envAD(ng.gain, t, 0.001, 0.3 * v, 0.03);
     n.connect(filter('lowpass', 900, 0.8)).connect(ng).connect(bus);
     goNoise(n, t, t + 0.05);
     send(g, 0.35, hall);
   }
 
   crash(t, v = 1) {
-    const { osc, gain, filter, noise, go, goNoise, env, send, bus, hall } = this.r;
+    const { osc, gain, filter, noise, go, goNoise, send, bus, hall } = this.r;
     const n = noise(), g = gain(0);
-    env(g.gain, t, 0.001, 0.26 * v, 1.1);
+    AudioEngine.envAD(g.gain, t, 0.001, 0.26 * v, 1.1);
     n.connect(filter('highpass', 3200, 0.5)).connect(g).connect(bus);
     goNoise(n, t, t + 1.2);
     for (const f of [3100, 4730, 6210]) {
       const o = osc('square', f), og = gain(0);
-      env(og.gain, t, 0.001, 0.02 * v, 0.6);
+      AudioEngine.envAD(og.gain, t, 0.001, 0.02 * v, 0.6);
       o.connect(og).connect(bus);
       go(o, t, t + 0.7);
     }
@@ -370,10 +370,10 @@ class Synth {
   }
 
   tom(t, f, v = 1) {
-    const { osc, gain, shaper, ramp, go, env, send, bus, verb } = this.r;
+    const { osc, gain, shaper, ramp, go, send, bus, verb } = this.r;
     const o = osc('triangle', f), g = gain(0);
     ramp(o.frequency, t, f * 1.15, [[f * 0.6, 0.16]]);
-    env(g.gain, t, 0.001, 0.45 * v, 0.18);
+    AudioEngine.envAD(g.gain, t, 0.001, 0.45 * v, 0.18);
     o.connect(g).connect(shaper(this.curves.soft)).connect(bus);
     go(o, t, t + 0.22);
     send(g, 0.25, verb);
@@ -545,7 +545,7 @@ class Arrangement {
 }
 
 export default class Music {
-  constructor({ audio, score, bpm = 140, loopBars = 40 }) {
+  constructor(audio, score, bpm = 140, loopBars = 40) {
     this.audio = audio;
     this.spb = 60 / bpm;
     this.s16 = this.spb / 4;
@@ -572,11 +572,6 @@ export default class Music {
     this._noise = null;
   }
 
-  get canPlay() {
-    const c = this.audio.ctx;
-    return !!c && c.state === 'running';
-  }
-
   /* ---------------- helpers ---------------- */
 
   static makeImpulse(ctx, dur, decay) {
@@ -591,8 +586,8 @@ export default class Music {
 
   _noiseBuffer() {
     if (!this._noise) {
-      const ctx = this.audio.ctx, sr = ctx.sampleRate;
-      const buf = ctx.createBuffer(1, sr * 4, sr);
+      const sr = this.audio.sampleRate;
+      const buf = this.audio.ctx.createBuffer(1, sr * 4, sr);
       const d = buf.getChannelData(0);
       for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
       this._noise = buf; // AudioBuffers can be shared with offline contexts
@@ -601,13 +596,7 @@ export default class Music {
   }
 
   _makeRig(ctx, dest) {
-    return new MusicRig(ctx, {
-      dest,
-      spb: this.spb,
-      makeIR: Music.makeImpulse,
-      noiseBuffer: this._noiseBuffer(),
-      env: (p, t, a, pk, d) => AudioEngine.envAD(p, t, a, pk, d),
-    });
+    return new MusicRig(ctx, { dest, spb: this.spb, noiseBuffer: this._noiseBuffer() });
   }
 
   /* ---------------- pre-render ---------------- */
@@ -652,7 +641,7 @@ export default class Music {
       this.rendering = false;
     };
     const p = off.startRendering();
-    if (p && p.then) p.then(done, () => (this.rendering = false));
+    if (p && p.then) p.then(done, () => this.rendering = false);
     else off.oncomplete = (e) => done(e.renderedBuffer);
   }
 
@@ -682,7 +671,7 @@ export default class Music {
   /* ---------------- transport ---------------- */
 
   start(t0, fromStep = 0) {
-    if (!this.canPlay) return;
+    if (!this.audio.running) return;
     this.stop(true);
     if (this.buffer && fromStep >= 32) {
       this.out = this._newOut();

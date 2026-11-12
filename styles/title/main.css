@@ -63,7 +63,6 @@ body {
   inset: 0;
   pointer-events: none;
 }
-
 #ui button {
   pointer-events: auto;
   font: inherit;
@@ -71,7 +70,6 @@ body {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-
 #ui button:focus-visible {
   outline: 3px solid var(--gold);
   outline-offset: 3px;
